@@ -1,6 +1,6 @@
 app = {
   schema: 2,
-  version: '0.0.8',
+  version: '0.0.9',
   label: 'Jira → Teams Уведомления',
   description: 'Интеллектуальные уведомления о событиях Jira в Microsoft Teams. Автоматически адаптируется под тип задачи (эпик, задача, подзадача) и роль получателя',
   blocks: {
@@ -472,20 +472,29 @@ app = {
         };
       }
     },
-    SendTeamsAdaptiveCard_NewIssueWhereYouAreAssignee: {
-      label: "Новая задача, где ты — Исполнитель",
-      description: "Отправляет адаптивную карточку в Teams с событием \"Новая задача JIRA, где ты — Исполнитель\"",
+    SendTeamsAdaptiveCard_NewIssueWhereYouAreAssignee_Generic: {
+      label: "Новая задача, где ты — Исполнитель (Универсальный)",
+      description: "Отправляет адаптивную карточку в Teams с событием \"Новая задача JIRA, где ты — Исполнитель\", автоматически определяя тип сущности Jira",
       inputFields: [
-        { key: "issue_key", label: "Ключ задачи (issue_key)", type: "text", required: true },
-        { key: "issue_summary", label: "Название задачи (issue_summary)", type: "text", required: true },
-        { key: "issue_url", label: "URL задачи (issue_key)", type: "text", required: true },
-        { key: "issue_description", label: "Описание задачи (issue_description)", type: "text", required: true },
-        { key: "epic_summary", label: "Название эпика (epic_summary)", type: "text" },
-        { key: "epic_link", label: "URL эпика (epic_link)", type: "text" },
-        { key: "reporter", label: "Автор задачи (issue_reporter)", type: "text" },
-        { key: "created_at", label: "Дата изменения (created_at)", type: "text" },
-        { key: "due_date", label: "Дата исполнения (due_date)", type: "text" },
-        { key: "target_emails", label: "Получатели карточки (targetEmails)", type: "text", hint: "E-mail адреса через запятую", required: true }
+        { key: "issue_key", label: "Ключ задачи", type: "text", hint: "issue_key", required: true },
+        { key: "issue_summary", label: "Название задачи", type: "text", hint: "issue_summary", required: true },
+        { key: "issue_url", label: "URL задачи", type: "text", hint: "issue_url", required: true },
+        { key: "issue_type", label: "Тип задачи", type: "text", hint: "issue_type", required: true },
+        { key: "issue_type_name", label: "Название типа задачи", type: "text", hint: "issue_type_name", required: true },
+        { key: "issue_description", label: "Описание задачи", type: "text", hint: "issue_description", required: true },
+        { key: "epic_key", label: "Ключ эпика", type: "text", hint: "epic_key" },
+        { key: "epic_summary", label: "Название эпика", type: "text", hint: "epic_summary" },
+        { key: "epic_link", label: "URL эпика", type: "text", hint: "epic_link" },
+        { key: "parent_key", label: "Ключ родительской задачи", type: "text", hint: "parent_key" },
+        { key: "parent_summary", label: "Название родительской задачи", type: "text", hint: "parent_summary" },
+        { key: "reporter", label: "Автор задачи", type: "text", hint: "reporter" },
+        { key: "created_at", label: "Дата создания", type: "text", hint: "created_at" },
+        { key: "due_date", label: "Дата исполнения", type: "text", hint: "due_date" },
+        { key: "issue_responsible_implementer", label: "Ответственный за внедрение", type: "text", hint: "issue_responsible_implementer" },
+        { key: "issue_responsible_sales", label: "Ответственный за продажи", type: "text", hint: "issue_responsible_sales" },
+        { key: "issue_responsible_analytic", label: "Ответственный аналитик", type: "text", hint: "issue_responsible_analytic" },
+        { key: "issue_responsible_tsupporter", label: "Ответственный специалист ТП", type: "text", hint: "issue_responsible_tsupporter" },
+        { key: "target_emails", label: "Получатели уведомления", type: "text", hint: "target_emails (E-mail адреса через запятую)", required: true }
       ],
       executePagination: (service, bundle) => {
         const webhookUrl = bundle.authData.incoming_webhook_url;
@@ -513,11 +522,87 @@ app = {
             : `${jiraBaseUrl}/browse/${safe(input.issue_key)}`;
 
         const epicUrl =
-          input.epic_url &&
-            input.epic_url.trim() !== "" &&
-            (input.epic_url.startsWith("http://") || input.epic_url.startsWith("https://"))
-            ? input.epic_url
-            : `${jiraBaseUrl}/browse/${safe(input.epic_link)}`;
+          input.epic_link &&
+            input.epic_link.trim() !== "" &&
+            (input.epic_link.startsWith("http://") || input.epic_link.startsWith("https://"))
+            ? input.epic_link
+            : input.epic_key ? `${jiraBaseUrl}/browse/${safe(input.epic_key)}` : null;
+
+        const parentUrl = input.parent_key ? `${jiraBaseUrl}/browse/${safe(input.parent_key)}` : null;
+
+        // 🔹 Определяем тип задачи и проект
+        const issueType = input.issue_type?.toLowerCase() || "";
+        const projectKey = (input.issue_key?.split("-")[0] || "").toUpperCase();
+        const isEpic = issueType === "epic";
+        const isPRK = projectKey === "PRK";
+
+        // 🔹 Заголовок бейджа и контекстный блок
+        let badgeText = "";
+        let contextBlock = null;
+        let openButtonTitle = "Открыть задачу";
+
+        switch (issueType) {
+          case "epic":
+            badgeText = "Новый Epic, где ты — Исполнитель";
+            openButtonTitle = "Открыть Epic";
+            break;
+          case "subtask":
+            badgeText = "Новая подзадача, где ты — Исполнитель";
+            openButtonTitle = "Открыть подзадачу";
+            if (input.parent_key && input.parent_summary) {
+              contextBlock = {
+                type: "RichTextBlock",
+                inlines: [
+                  { type: "TextRun", text: "Родительская задача: ", weight: "Bolder" },
+                  {
+                    type: "TextRun",
+                    text: `[${safe(input.parent_key)}] ${safe(input.parent_summary)}`,
+                    color: "Accent",
+                    selectAction: { type: "Action.OpenUrl", url: parentUrl }
+                  }
+                ]
+              };
+            }
+            break;
+          default:
+            badgeText = "Новая задача, где ты — Исполнитель";
+            openButtonTitle = "Открыть задачу";
+            if (input.epic_key && input.epic_summary) {
+              contextBlock = {
+                type: "RichTextBlock",
+                inlines: [
+                  { type: "TextRun", text: "Эпик: ", weight: "Bolder" },
+                  {
+                    type: "TextRun",
+                    text: `[${safe(input.epic_key)}] ${safe(input.epic_summary)}`,
+                    color: "Accent",
+                    selectAction: { type: "Action.OpenUrl", url: epicUrl }
+                  }
+                ]
+              };
+            }
+        }
+
+        // 🔹 Формируем секцию ролей (разные для PRK-эпиков и остальных)
+        let roleFacts = [];
+
+        if (isEpic && isPRK) {
+          // Эпик проекта PRK → показываем расширенные роли
+          roleFacts = [
+            { title: "Менеджер внедрений:", value: safe(input.issue_responsible_implementer) },
+            { title: "Менеджер по продажам:", value: safe(input.issue_responsible_sales) },
+            { title: "Аналитик:", value: safe(input.issue_responsible_analytic) },
+            { title: "Специалист ТП:", value: safe(input.issue_responsible_tsupporter) },
+            { title: "Дата регистрации:", value: safe(input.created_at) },
+          ].filter(f => f.value && f.value !== "-");
+        } else {
+          // Обычные задачи / подзадачи и эпики других проектов
+          roleFacts = [
+            { title: "Автор:", value: safe(input.reporter) },
+            { title: "Дата регистрации:", value: safe(input.created_at) },
+            { title: "Дата исполнения:", value: safe(input.due_date) }
+          ];
+        }
 
         const card = {
           type: "AdaptiveCard",
@@ -525,7 +610,7 @@ app = {
           body: [
             {
               type: "TextBlock",
-              text: "powered by IM LLC",
+              text: "powered by IM LLC / Proceset",
               size: "Small",
               horizontalAlignment: "Right",
               isSubtle: true,
@@ -536,7 +621,7 @@ app = {
               items: [
                 {
                   type: "Badge",
-                  text: "Новая задача, где ты — Исполнитель",
+                  text: badgeText,
                   size: "Large",
                   style: "Attention",
                   icon: "PersonSquare"
@@ -557,7 +642,13 @@ app = {
             },
             {
               type: "TextBlock",
-              text: "**Описание задачи:**",
+              text: `**Инициатор:** ${safe(input.created_by)}`,
+              wrap: true,
+              spacing: "Small"
+            },
+            {
+              type: "TextBlock",
+              text: "**Описание:**",
               wrap: true,
               spacing: "Small"
             },
@@ -573,42 +664,17 @@ app = {
               style: "emphasis",
               spacing: "None"
             },
-            {
-              type: "TextBlock",
-              text: `**Дата исполнения:** ${safe(input.due_date)}`,
-              wrap: true,
-              weight: "Bolder",
-              spacing: "Medium"
-            },
-            {
-              type: "RichTextBlock",
-              inlines: [
-                { type: "TextRun", text: "Ссылка на Epic: ", weight: "Bolder" },
-                {
-                  type: "TextRun",
-                  text: `${safe(input.epic_summary)}`,
-                  color: "Accent",
-                  selectAction: {
-                    type: "Action.OpenUrl",
-                    url: `${safe(epicUrl)}`
-                  }
-                }
-              ],
-              spacing: "Medium"
-            },
+            ...(contextBlock ? [contextBlock] : []),
             {
               type: "FactSet",
-              facts: [
-                { title: "Автор:", value: `${safe(input.reporter)}` },
-                { title: "Дата регистрации:", value: `${safe(input.created_at)}` }
-              ],
+              facts: roleFacts,
               spacing: "Medium"
             }
           ],
           actions: [
             {
               type: "Action.OpenUrl",
-              title: "Открыть задачу",
+              title: openButtonTitle,
               url: safe(issueUrl),
               style: "positive",
               iconUrl: "icon:Link"
