@@ -1,6 +1,6 @@
 app = {
     schema: 2,
-    version: "1.0.1",
+    version: "1.0.2",
     label: "Tool Kit",
     description: "",
     blocks: {
@@ -198,6 +198,40 @@ app = {
                     state: { parsed: true },
                     hasNext: false
                 };
+            }
+        },
+        SynchronizerWithAvailableMapping: {
+            label: "🗘 Синхронизатор (с сохранением данных из прошлых блоков)",
+            description: "Синхронизирует выполнение блоков скриптов: останавливает или продолжает в зависимости от режима, при этом сохраняя возможность использования данных маппинга из прошлых блоков.",
+            inputFields: [{ key: "stop_mode", label: "Остановить выполнение?", type: "boolean", default: false }],
+            execute: (service, bundle) => {
+                const { stop_mode } = bundle.inputData || {};
+                const input = bundle.input || [];
+                // Собираем входные данные в массив в meta
+                bundle.meta = bundle.meta || {};
+                bundle.meta.data = bundle.meta.data || [];
+                bundle.meta.data.push(...input);
+                if (stop_mode === true || stop_mode === "true") {
+                    bundle.meta.data = [];
+                    return {
+                        output: [],
+                        output_variables: []
+                    };
+                }
+                // Для продолжения: даем один пуск, используя meta для отслеживания
+                const launched = bundle.meta.launched;
+                if (launched) {
+                    return {
+                        output: [],
+                        output_variables: []
+                    };
+                } else {
+                    bundle.meta.launched = true;
+                    return {
+                        output: [["continue"]],
+                        output_variables: [{ name: "status", type: "String" }]
+                    };
+                }
             }
         }
     },

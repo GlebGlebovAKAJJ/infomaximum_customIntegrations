@@ -1098,6 +1098,147 @@ app = {
           hasNext: false
         };
       }
+    },
+    SendTeamsAdaptiveCard_NotificationTypeRemoved: {
+      label: "Удален тип уведомления (Системное)",
+      description: "Отправляет адаптивную карточку в Teams при удалении типа уведомления в системе Jira → Teams.",
+      inputFields: [
+        { key: "employee_name", label: "Имя сотрудника", hint: "employee_name", type: "text", required: true },
+        { key: "card_name_ru", label: "Наименование типа уведомления", hint: 'card_name_ru', type: "text", required: true },
+        { key: "deleted_at", label: "Дата удаления", hint: "deleted_at", type: "text", required: true },
+        { key: "dashboard_url", label: "Ссылка на дашборд", hint: "dashboard_url", type: "text", required: true },
+        { key: "target_emails", label: "Список получателей (через запятую)", hint: "target_emails", type: "text", required: true }
+      ],
+
+      executePagination: (service, bundle) => {
+        const input = bundle.inputData;
+        const safe = s => (s ? String(s).replace(/[\r\n]+/g, " ").replace(/\"/g, "'") : "-");
+
+        const webhookUrl = bundle.authData.incoming_webhook_url;
+        const targetEmails = (input.target_emails || "")
+          .split(",").map(e => e.trim()).filter(Boolean);
+
+        const sendUid = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+        const sendTime = new Date().toISOString();
+        const start = Date.now();
+
+        const card = {
+          type: "AdaptiveCard",
+          version: "1.5",
+          body: [
+            {
+              type: "TextBlock",
+              text: "powered by IM LLC / Proceset",
+              size: "Small",
+              horizontalAlignment: "Right",
+              isSubtle: true,
+              spacing: "None"
+            },
+            {
+              type: "Container",
+              style: "attention",
+              showBorder: true,
+              roundedCorners: true,
+              spacing: "Medium",
+              items: [
+                {
+                  type: "Badge",
+                  text: "Системное уведомление",
+                  size: "Large",
+                  style: "Attention",
+                  icon: "Warning",
+                  horizontalAlignment: "Center"
+                },
+                {
+                  type: "TextBlock",
+                  text: "**Тип уведомления был удалён**",
+                  wrap: true,
+                  weight: "Bolder",
+                  size: "Medium",
+                  spacing: "Small",
+                  horizontalAlignment: "Center"
+                }
+              ]
+            },
+            {
+              type: "TextBlock",
+              text: `Приветствуем, ${safe(input.employee_name)}!`,
+              wrap: true,
+              spacing: "Large",
+              horizontalAlignment: "Center"
+            },
+            {
+              type: "TextBlock",
+              text: "Сообщаем, что один из типов уведомлений в системе Jira → Teams был удалён и больше не доступен для использования. ",
+              wrap: true,
+              spacing: "Large",
+              isSubtle: true
+            },
+            {
+              type: "FactSet",
+              facts: [
+                {
+                  title: "Удалённый тип:",
+                  value: `**${safe(input.card_name_ru)}**`
+                },
+                {
+                  title: "Дата удаления:",
+                  value: `${safe(input.deleted_at)}`
+                }
+              ]
+            }
+          ],
+          data: { targetEmails }
+        }
+
+        // Отправка карточки
+        let response;
+        try {
+          response = service.request({
+            url: webhookUrl,
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-ms-client-request-id": sendUid
+            },
+            jsonBody: { payload: JSON.stringify(card) }
+          });
+        } catch (e) {
+          throw new Error("Ошибка при выполнении запроса: " + e.message);
+        }
+
+        const duration = Date.now() - start;
+        const respBody = new TextDecoder().decode(response.response || new TextEncoder().encode(""));
+
+        if (response.status < 200 || response.status >= 300)
+          throw new Error(`Ошибка отправки карточки: ${response.status} ${respBody || ""}`);
+
+        // 🔹 Возврат результатов
+        return {
+          output: [[
+            response?.status >= 200 && response?.status < 300
+              ? "Карточка успешно отправлена"
+              : "Карточка не отправлена",
+            String(response?.status) ?? null,
+            sendTime ?? null,
+            duration ?? null,
+            Array.isArray(targetEmails) ? targetEmails.join(", ") : null,
+            webhookUrl ? webhookUrl.slice(0, 50) + "..." : null,
+            sendUid ?? null
+          ]],
+          output_variables: [
+            { name: "message", type: "String" },
+            { name: "status", type: "String" },
+            { name: "send_time", type: "DateTime" },
+            { name: "duration_ms", type: "Double" },
+            { name: "recipients", type: "String" },
+            { name: "flow_endpoint", type: "String" },
+            { name: "send_uid", type: "String" }
+          ],
+          state: undefined,
+          hasNext: false
+        };
+      }
     }
   },
   connections: {
