@@ -1,493 +1,552 @@
+// Вспомогательные функции и константы
+
+// Очищает строку от специальных символов (переносы строк и кавычки), заменяя их на безопасные альтернативы, или возвращает дефолтное значение, если вход пустой.
+const safe = s => {
+  if (!s) return "-";
+  const str = String(s);
+  if (!/[\r\n\"]/.test(str)) return str;
+  return str.replace(/[\r\n]+/g, " ").replace(/\"/g, "'");
+};
+
+//  Извлекает общие данные из bundle и input, включая URL вебхука, базовый URL Jira, список email-адресов, уникальный ID отправки, время отправки и стартовое время для замера длительности.
+const getCommonData = (bundle, input) => {
+  const webhookUrl = bundle.authData.incoming_webhook_url;
+  if (!webhookUrl) {
+    throw new Error("URL вебхука не указан. Заполните поле и повторите попытку.");
+  }
+  const jiraBaseUrl = (bundle.authData.jira_base_url || "").replace(/\/$/, "");
+  if (!jiraBaseUrl) {
+    throw new Error('В настойках подключения не указан jiraBaseUrl. Заполните поле и повторите попытку.');
+  }
+  const targetEmails = (input.target_emails || "").split(",").map(e => e.trim()).filter(Boolean);
+  const sendUid = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+  const sendTime = new Date().toISOString();
+  const start = Date.now();
+  return { webhookUrl, jiraBaseUrl, targetEmails, sendUid, sendTime, start };
+};
+
+// Формирует URL задачи, контекстный URL (если есть), тип задачи, ключ проекта, флаги для эпика и проекта PRK на основе входных данных.
+const getIssueData = (input, jiraBaseUrl) => {
+  const issueUrl = `${jiraBaseUrl}/browse/${safe(input.issue_key)}`;
+  const contextUrl = input.context_issue_key ? `${jiraBaseUrl}/browse/${safe(input.context_issue_key)}` : null;
+  const issueType = input.issue_type?.toLowerCase() || "";
+  const projectKey = (input.issue_key?.split("-")[0] || "").toUpperCase();
+  const isEpic = issueType === "epic";
+  const isPRK = projectKey === "PRK";
+  return { issueUrl, contextUrl, issueType, projectKey, isEpic, isPRK };
+};
+
+// Создает блок контекста для карточки, если есть контекстная задача, с ссылкой на эпик или родительскую задачу в зависимости от типа.
+const buildContextBlock = (input, contextUrl, issueType) => {
+  if (!input.context_issue_key || !input.context_issue_summary) return null;
+  const label = issueType === "subtask" ? "Родительская задача: " : "Эпик: ";
+  return {
+    type: "RichTextBlock",
+    inlines: [
+      { type: "TextRun", text: label, weight: "Bolder" },
+      {
+        type: "TextRun",
+        text: `[${safe(input.context_issue_key)}] ${safe(input.context_issue_summary)}`,
+        color: "Accent",
+        selectAction: { type: "Action.OpenUrl", url: contextUrl }
+      }
+    ]
+  };
+};
+
+// Определяет текст бейджа и заголовок кнопки открытия задачи на основе типа задачи и типа блока, включая статусы для комментариев, изменений статуса и новых задач.
+const getBadgeAndButton = (issueType, blockType, input) => {
+  let badgeText = "";
+  let openButtonTitle = "Открыть задачу";
+  switch (issueType) {
+    case "epic":
+      if (blockType === 'comment') badgeText = "Новый комментарий в Epic";
+      else if (blockType === 'status') badgeText = `Изменение статуса в Epic: ${safe(input.from_status)} → ${safe(input.to_status)}`;
+      else if (blockType === 'assignee') badgeText = "Новый Epic, где ты — Исполнитель";
+      openButtonTitle = "Открыть Epic";
+      break;
+    case "subtask":
+      if (blockType === 'comment') badgeText = "Новый комментарий в подзадаче";
+      else if (blockType === 'status') badgeText = `Изменение статуса в подзадаче: ${safe(input.from_status)} → ${safe(input.to_status)}`;
+      else if (blockType === 'assignee') badgeText = "Новая подзадача, где ты — Исполнитель";
+      else if (blockType === 'nested') badgeText = "Новая подзадача";
+      openButtonTitle = "Открыть подзадачу";
+      break;
+    default:
+      if (blockType === 'comment') badgeText = "Новый комментарий в задаче";
+      else if (blockType === 'status') badgeText = `Изменение статуса в задаче: ${safe(input.from_status)} → ${safe(input.to_status)}`;
+      else if (blockType === 'assignee') badgeText = "Новая задача, где ты — Исполнитель";
+      else if (blockType === 'nested') badgeText = "Новая задача";
+      openButtonTitle = "Открыть задачу";
+  }
+  return { badgeText, openButtonTitle };
+};
+
+// Собирает массив фактов (ключ-значение) для карточки, включая роли (автор, исполнитель, менеджеры) и даты, в зависимости от типа блока и флагов эпика/PRK.
+const buildRoleFacts = (input, isEpic, isPRK, blockType) => {
+  const facts = [];
+  if (blockType === 'comment') {
+    if (isEpic && isPRK) {
+      const val1 = safe(input.issue_responsible_implementer);
+      if (val1 && val1 !== "-") facts.push({ title: "Менеджер внедрений:", value: val1 });
+      const val2 = safe(input.issue_responsible_sales);
+      if (val2 && val2 !== "-") facts.push({ title: "Менеджер по продажам:", value: val2 });
+      const val3 = safe(input.issue_responsible_analytic);
+      if (val3 && val3 !== "-") facts.push({ title: "Аналитик:", value: val3 });
+      const val4 = safe(input.issue_responsible_tsupporter);
+      if (val4 && val4 !== "-") facts.push({ title: "Специалист ТП:", value: val4 });
+      const val5 = safe(input.comment_created);
+      if (val5 && val5 !== "-") facts.push({ title: "Дата комментария:", value: val5 });
+    } else if (isEpic) {
+      const val1 = safe(input.assignee);
+      if (val1 && val1 !== "-") facts.push({ title: "Исполнитель:", value: val1 });
+      const val2 = safe(input.reporter);
+      if (val2 && val2 !== "-") facts.push({ title: "Автор:", value: val2 });
+      const val3 = safe(input.comment_created);
+      if (val3 && val3 !== "-") facts.push({ title: "Дата комментария:", value: val3 });
+    } else {
+      const val1 = safe(input.reporter);
+      if (val1 && val1 !== "-") facts.push({ title: "Автор:", value: val1 });
+      const val2 = safe(input.assignee);
+      if (val2 && val2 !== "-") facts.push({ title: "Исполнитель:", value: val2 });
+      const val3 = safe(input.comment_created);
+      if (val3 && val3 !== "-") facts.push({ title: "Дата комментария:", value: val3 });
+    }
+  } else if (blockType === 'status') {
+    if (isEpic && isPRK) {
+      const val1 = safe(input.issue_responsible_implementer);
+      if (val1 && val1 !== "-") facts.push({ title: "Менеджер внедрений:", value: val1 });
+      const val2 = safe(input.issue_responsible_sales);
+      if (val2 && val2 !== "-") facts.push({ title: "Менеджер по продажам:", value: val2 });
+      const val3 = safe(input.issue_responsible_analytic);
+      if (val3 && val3 !== "-") facts.push({ title: "Аналитик:", value: val3 });
+      const val4 = safe(input.issue_responsible_tsupporter);
+      if (val4 && val4 !== "-") facts.push({ title: "Специалист ТП:", value: val4 });
+      const val5 = safe(input.created_at);
+      if (val5 && val5 !== "-") facts.push({ title: "Дата изменения:", value: val5 });
+    } else if (isEpic) {
+      const val1 = safe(input.assignee);
+      if (val1 && val1 !== "-") facts.push({ title: "Исполнитель:", value: val1 });
+      const val2 = safe(input.reporter);
+      if (val2 && val2 !== "-") facts.push({ title: "Автор:", value: val2 });
+      const val3 = safe(input.created_at);
+      if (val3 && val3 !== "-") facts.push({ title: "Дата изменения:", value: val3 });
+    } else {
+      const val1 = safe(input.reporter);
+      if (val1 && val1 !== "-") facts.push({ title: "Автор:", value: val1 });
+      const val2 = safe(input.assignee);
+      if (val2 && val2 !== "-") facts.push({ title: "Исполнитель:", value: val2 });
+      const val3 = safe(input.created_at);
+      if (val3 && val3 !== "-") facts.push({ title: "Дата изменения:", value: val3 });
+    }
+  } else if (blockType === 'assignee') {
+    if (isEpic && isPRK) {
+      const val1 = safe(input.issue_responsible_implementer);
+      if (val1 && val1 !== "-") facts.push({ title: "Менеджер внедрений:", value: val1 });
+      const val2 = safe(input.issue_responsible_sales);
+      if (val2 && val2 !== "-") facts.push({ title: "Менеджер по продажам:", value: val2 });
+      const val3 = safe(input.issue_responsible_analytic);
+      if (val3 && val3 !== "-") facts.push({ title: "Аналитик:", value: val3 });
+      const val4 = safe(input.issue_responsible_tsupporter);
+      if (val4 && val4 !== "-") facts.push({ title: "Специалист ТП:", value: val4 });
+      const val5 = safe(input.created_at);
+      if (val5 && val5 !== "-") facts.push({ title: "Дата регистрации:", value: val5 });
+    } else {
+      const val1 = safe(input.reporter);
+      if (val1 && val1 !== "-") facts.push({ title: "Автор:", value: val1 });
+      const val2 = safe(input.created_at);
+      if (val2 && val2 !== "-") facts.push({ title: "Дата регистрации:", value: val2 });
+      const val3 = safe(input.due_date);
+      if (val3 && val3 !== "-") facts.push({ title: "Дата исполнения:", value: val3 });
+    }
+  } else if (blockType === 'nested') {
+    const val1 = safe(input.reporter);
+    if (val1 && val1 !== "-") facts.push({ title: "Автор:", value: val1 });
+    const val2 = safe(input.assignee);
+    if (val2 && val2 !== "-") facts.push({ title: "Исполнитель:", value: val2 });
+    const val3 = safe(input.created_at);
+    if (val3 && val3 !== "-") facts.push({ title: "Дата регистрации:", value: val3 });
+  }
+  return facts;
+};
+
+// Строит тело адаптивной карточки, включая общий заголовок, контейнер с бейджем, специфические части для типа блока (комментарий, статус, назначение, вложенная задача), контекстный блок и набор фактов.
+const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, issueUrl, targetEmails) => {
+  const commonHeader = {
+    type: "TextBlock",
+    text: "powered by IM LLC / Proceset",
+    size: "Small",
+    horizontalAlignment: "Right",
+    isSubtle: true,
+    spacing: "None"
+  };
+
+  const badgeContainer = {
+    type: "Container",
+    items: [
+      {
+        type: "Badge",
+        text: badgeText,
+        size: "Large",
+        style: blockType === 'comment' ? "Accent" : blockType === 'status' ? "Accent" : blockType === 'assignee' ? "Attention" : "Good",
+        icon: blockType === 'comment' ? "CommentAdd" : blockType === 'status' ? "ArrowSync" : "PersonSquare"
+      },
+      {
+        type: "TextBlock",
+        text: `**[${safe(input.issue_key)}]** ${safe(input.issue_summary)}`,
+        wrap: true,
+        weight: "Bolder",
+        size: "Medium",
+        spacing: "Small"
+      }
+    ],
+    style: "accent",
+    showBorder: true,
+    roundedCorners: true,
+    spacing: "Medium"
+  };
+
+  let specificParts = [];
+
+  if (blockType === 'comment') {
+    specificParts = [
+      {
+        type: "TextBlock",
+        text: `**${safe(input.comment_author)}** пишет:`,
+        wrap: true,
+        spacing: "Small"
+      },
+      {
+        type: "Container",
+        items: [
+          {
+            type: "RichTextBlock",
+            inlines: [
+              { type: "TextRun", text: `${safe(input.comment_body)}`, wrap: true }
+            ]
+          }
+        ],
+        style: "emphasis",
+        spacing: "None"
+      }
+    ];
+  } else if (blockType === 'status') {
+    specificParts = [
+      {
+        type: "TextBlock",
+        text: `**Инициатор:** ${safe(input.created_by)}`,
+        wrap: true,
+        spacing: "Small"
+      }
+    ];
+  } else if (blockType === 'assignee') {
+    specificParts = [
+      {
+        type: "TextBlock",
+        text: `**Инициатор:** ${safe(input.created_by)}`,
+        wrap: true,
+        spacing: "Small"
+      },
+      {
+        type: "TextBlock",
+        text: "**Описание:**",
+        wrap: true,
+        spacing: "Small"
+      },
+      {
+        type: "Container",
+        items: [
+          {
+            type: "TextBlock",
+            text: `${safe(input.issue_description)}`,
+            wrap: true
+          }
+        ],
+        style: "emphasis",
+        spacing: "None"
+      }
+    ];
+  } else if (blockType === 'nested') {
+    specificParts = [
+      {
+        type: "TextBlock",
+        text: `**Инициатор:** ${safe(input.created_by)}`,
+        wrap: true,
+        spacing: "Small"
+      },
+      {
+        type: "TextBlock",
+        text: "**Описание задачи:**",
+        wrap: true,
+        spacing: "Small"
+      },
+      {
+        type: "Container",
+        items: [
+          {
+            type: "RichTextBlock",
+            inlines: [
+              {
+                type: "TextRun",
+                text: `${safe(input.issue_description)}`
+              }
+            ]
+          }
+        ],
+        style: "emphasis",
+        spacing: "None"
+      }
+    ];
+  }
+
+  return [
+    commonHeader,
+    badgeContainer,
+    ...specificParts,
+    ...(contextBlock ? [contextBlock] : []),
+    {
+      type: "FactSet",
+      facts: roleFacts,
+      spacing: "Medium"
+    }
+  ];
+};
+
+// Отправляет адаптивную карточку через HTTP-запрос к вебхуку Teams, обрабатывая ошибки и возвращая ответ.
+const sendCard = (service, webhookUrl, card, sendUid) => {
+  let response;
+  try {
+    response = service.request({
+      url: webhookUrl,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-ms-client-request-id": sendUid
+      },
+      jsonBody: { payload: JSON.stringify(card) }
+    });
+  } catch (e) {
+    throw new Error("Ошибка при выполнении запроса: " + e.message);
+  }
+  const respBody = new TextDecoder().decode(response.response || new TextEncoder().encode(""));
+  if (response.status < 200 || response.status >= 300)
+    throw new Error(`Ошибка отправки карточки: ${response.status} ${respBody || ""}`);
+  return response;
+};
+
+// Формирует выходной объект с результатом отправки, статусом, временем, длительностью, получателями, endpoint и уникальным ID.
+const buildOutput = (response, sendTime, duration, targetEmails, webhookUrl, sendUid) => {
+  return {
+    output: [[
+      response?.status >= 200 && response?.status < 300
+        ? "Карточка успешно отправлена"
+        : "Карточка не отправлена",
+      String(response?.status) ?? null,
+      sendTime ?? null,
+      duration ?? null,
+      Array.isArray(targetEmails) ? targetEmails.join(", ") : null,
+      webhookUrl ? webhookUrl.slice(0, 50) + "..." : null,
+      sendUid ?? null
+    ]],
+    output_variables: [
+      { name: "message", type: "String" },
+      { name: "status", type: "String" },
+      { name: "send_time", type: "DateTime" },
+      { name: "duration_ms", type: "Double" },
+      { name: "recipients", type: "String" },
+      { name: "flow_endpoint", type: "String" },
+      { name: "send_uid", type: "String" }
+    ],
+    state: undefined,
+    hasNext: false
+  };
+};
+
+// Выполняет системный блок уведомления, строя и отправляя карточку с заданным стилем, текстами и фактами, возвращая результат.
+const executeSystemBlock = (service, style, badgeText, mainText, greetingText, bodyText, facts, actionTitle, bundle) => {
+  const input = bundle.inputData;
+  const webhookUrl = bundle.authData.incoming_webhook_url;
+  const targetEmails = (input.target_emails || "").split(",").map(e => e.trim()).filter(Boolean);
+  const sendUid = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+  const sendTime = new Date().toISOString();
+  const start = Date.now();
+
+  const card = {
+    type: "AdaptiveCard",
+    version: "1.5",
+    body: [
+      {
+        type: "TextBlock",
+        text: "powered by IM LLC / Proceset",
+        size: "Small",
+        horizontalAlignment: "Right",
+        isSubtle: true,
+        spacing: "None"
+      },
+      {
+        type: "Container",
+        style: style,
+        showBorder: true,
+        roundedCorners: true,
+        spacing: "Medium",
+        items: [
+          {
+            type: "Badge",
+            text: badgeText,
+            size: "Large",
+            style: style === "accent" ? "Good" : "Attention",
+            icon: style === "accent" ? "MegaphoneLoud" : "Warning",
+            horizontalAlignment: "Center"
+          },
+          {
+            type: "TextBlock",
+            text: mainText,
+            wrap: true,
+            weight: "Bolder",
+            size: "Medium",
+            spacing: "Small",
+            horizontalAlignment: "Center"
+          }
+        ]
+      },
+      {
+        type: "TextBlock",
+        text: greetingText,
+        wrap: true,
+        spacing: "Large",
+        horizontalAlignment: "Center"
+      },
+      {
+        type: "TextBlock",
+        text: bodyText,
+        wrap: true,
+        spacing: "Large",
+        isSubtle: true
+      },
+      {
+        type: "FactSet",
+        facts: facts
+      },
+      ...(actionTitle ? [{
+        type: "ActionSet",
+        actions: [
+          {
+            type: "Action.OpenUrl",
+            title: actionTitle,
+            style: "positive",
+            url: safe(input.dashboard_url),
+            iconUrl: "icon:Link"
+          }
+        ],
+        horizontalAlignment: "Right",
+        spacing: "ExtraLarge"
+      }] : [])
+    ],
+    data: { targetEmails }
+  };
+
+  const response = sendCard(service, webhookUrl, card, sendUid);
+  const duration = Date.now() - start;
+  return buildOutput(response, sendTime, duration, targetEmails, webhookUrl, sendUid);
+};
+
+// Выполняет блок Jira-уведомления, собирая данные, строя карточку и отправляя её, возвращая результат с замерами производительности.
+const executeJiraBlock = (service, blockType, bundle) => {
+  const input = bundle.inputData;
+  const common = getCommonData(bundle, input);
+  const issueData = getIssueData(input, common.jiraBaseUrl);
+  const contextBlock = buildContextBlock(input, issueData.contextUrl, issueData.issueType);
+  const { badgeText, openButtonTitle } = getBadgeAndButton(issueData.issueType, blockType, input);
+  const roleFacts = buildRoleFacts(input, issueData.isEpic, issueData.isPRK, blockType);
+  const cardBody = buildCardBody(blockType, input, badgeText, contextBlock, roleFacts, issueData.issueUrl, common.targetEmails);
+  const card = {
+    type: "AdaptiveCard",
+    version: "1.5",
+    body: cardBody,
+    actions: [
+      {
+        type: "Action.OpenUrl",
+        title: openButtonTitle,
+        url: safe(issueData.issueUrl),
+        style: "positive",
+        ...(blockType === 'assignee' || blockType === 'nested' ? { iconUrl: "icon:Link" } : {})
+      }
+    ],
+    data: { targetEmails: common.targetEmails }
+  };
+  const response = sendCard(service, common.webhookUrl, card, common.sendUid);
+  const duration = Date.now() - common.start;
+  return buildOutput(response, common.sendTime, duration, common.targetEmails, common.webhookUrl, common.sendUid);
+};
+
 app = {
   schema: 2,
-  version: '0.0.10',
-  label: 'Jira → Teams Уведомления',
+  version: '1.4.0',
+  label: 'Jira → Teams Уведомления EXP',
   description: 'Интеллектуальные уведомления о событиях Jira в Microsoft Teams. Автоматически адаптируется под тип задачи (эпик, задача, подзадача) и роль получателя',
   blocks: {
-    SendTeamsAdaptiveCard_NewComment_Generic: {
-      label: "Новый комментарий (Универсальный)",
+    NewComment: {
+      label: "Новый комментарий creator_name",
       description: "Отправляет адаптивную карточку в Teams, автоматически определяя тип сущности Jira",
       inputFields: [
-        { key: "issue_key", label: "issue_key", type: "text", required: true },
-        { key: "issue_summary", label: "issue_summary", type: "text", required: true },
-        { key: "issue_url", label: "issue_url", type: "text", required: true },
-        { key: "issue_type", label: "issue_type", type: "text", required: true },
-        { key: "issue_type_name", label: "issue_type_name", type: "text", required: true },
-        { key: "comment_author", label: "creator_name", type: "text", required: true },
-        { key: "comment_body", label: "comment_body", type: "text", required: true },
-        { key: "comment_created", label: "created_at", type: "text" },
-        { key: "epic_key", label: "epic_key", type: "text" },
-        { key: "epic_summary", label: "epic_summary", type: "text" },
-        { key: "parent_key", label: "parent_key", type: "text" },
-        { key: "parent_summary", label: "parent_summary", type: "text" },
-        { key: "reporter", label: "reporter_name", type: "text" },
-        { key: "assignee", label: "assignee_name", type: "text" },
-        { key: "issue_responsible_implementer", label: "issue_responsible_implementer", type: "text" },
-        { key: "issue_responsible_sales", label: "issue_responsible_sales", type: "text" },
-        { key: "issue_responsible_analytic", label: "issue_responsible_analytic", type: "text" },
-        { key: "issue_responsible_tsupporter", label: "issue_responsible_tsupporter", type: "text" },
-        { key: "target_emails", label: "target_emails", type: "text", required: true }
+        { key: "issue_key", label: "Ключ задачи", type: "text", hint: "issue_key", required: true },
+        { key: "issue_summary", label: "Название задачи", type: "text", hint: "issue_summary", required: true },
+        { key: "issue_type", label: "Тип задачи", type: "text", hint: "issue_type", required: true },
+        { key: "issue_type_name", label: "Название типа задачи", type: "text", hint: "issue_type_name", required: true },
+        { key: "comment_author", label: "Автор комментария", type: "text", hint: "comment_author", required: true },
+        { key: "comment_body", label: "Текст комментария", type: "text", hint: "comment_body", required: true },
+        { key: "comment_created", label: "Дата комментария", type: "text", hint: "comment_created" },
+        { key: "context_issue_key", label: "Ключ контекстной задачи", type: "text", hint: "context_issue_key (если задача - то ссылка на эпик, если подзадача, то ссылка на родителя)" },
+        { key: "context_issue_summary", label: "Название контекстной задачи", type: "text", hint: "context_issue_summary (если задача - то ссылка на эпик, если подзадача, то ссылка на родителя)" },
+        { key: "reporter", label: "Автор задачи", type: "text", hint: "reporter" },
+        { key: "assignee", label: "Исполнитель задачи", type: "text", hint: "assignee" },
+        { key: "issue_responsible_implementer", label: "Ответственный за внедрение", type: "text", hint: "issue_responsible_implementer" },
+        { key: "issue_responsible_sales", label: "Ответственный за продажи", type: "text", hint: "issue_responsible_sales" },
+        { key: "issue_responsible_analytic", label: "Ответственный аналитик", type: "text", hint: "issue_responsible_analytic" },
+        { key: "issue_responsible_tsupporter", label: "Ответственный специалист ТП", type: "text", hint: "issue_responsible_tsupporter" },
+        { key: "target_emails", label: "Получатели уведомления", type: "text", hint: "target_emails", required: true }
       ],
 
-      executePagination: (service, bundle) => {
-        const input = bundle.inputData;
-        const safe = s => (s ? String(s).replace(/[\r\n]+/g, " ").replace(/\"/g, "'") : "-");
-
-        const webhookUrl = bundle.authData.incoming_webhook_url;
-        const jiraBaseUrl = (bundle.authData.jira_base_url || "").replace(/\/$/, "");
-        const targetEmails = (input.target_emails || "")
-          .split(",").map(e => e.trim()).filter(Boolean);
-
-        const sendUid = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-        const sendTime = new Date().toISOString();
-        const start = Date.now();
-
-        const issueUrl = input.issue_url || `${jiraBaseUrl}/browse/${safe(input.issue_key)}`;
-        const epicUrl = input.epic_key ? `${jiraBaseUrl}/browse/${safe(input.epic_key)}` : null;
-        const parentUrl = input.parent_key ? `${jiraBaseUrl}/browse/${safe(input.parent_key)}` : null;
-
-        // 🔹 Определяем тип задачи и проект
-        const issueType = input.issue_type?.toLowerCase() || "";
-        const projectKey = (input.issue_key?.split("-")[0] || "").toUpperCase();
-        const isEpic = issueType === "epic";
-        const isPRK = projectKey === "PRK";
-
-        // 🔹 Заголовок бейджа и контекстный блок
-        let badgeText = "";
-        let contextBlock = null;
-        let openButtonTitle = "Открыть задачу";
-
-        switch (issueType) {
-          case "epic":
-            badgeText = "Новый комментарий в Epic";
-            openButtonTitle = "Открыть Epic";
-            break;
-          case "subtask":
-            badgeText = "Новый комментарий в подзадаче";
-            openButtonTitle = "Открыть подзадачу";
-            if (input.parent_key && input.parent_summary) {
-              contextBlock = {
-                type: "RichTextBlock",
-                inlines: [
-                  { type: "TextRun", text: "Родительская задача: ", weight: "Bolder" },
-                  {
-                    type: "TextRun",
-                    text: `[${safe(input.parent_key)}] ${safe(input.parent_summary)}`,
-                    color: "Accent",
-                    selectAction: { type: "Action.OpenUrl", url: parentUrl }
-                  }
-                ]
-              };
-            }
-            break;
-          default:
-            badgeText = "Новый комментарий в задаче";
-            openButtonTitle = "Открыть задачу";
-            if (input.epic_key && input.epic_summary) {
-              contextBlock = {
-                type: "RichTextBlock",
-                inlines: [
-                  { type: "TextRun", text: "Эпик: ", weight: "Bolder" },
-                  {
-                    type: "TextRun",
-                    text: `[${safe(input.epic_key)}] ${safe(input.epic_summary)}`,
-                    color: "Accent",
-                    selectAction: { type: "Action.OpenUrl", url: epicUrl }
-                  }
-                ]
-              };
-            }
-        }
-
-        // 🔹 Формируем секцию ролей (разные для PRK-эпиков и остальных)
-        let roleFacts = [];
-
-        if (isEpic && isPRK) {
-          // Эпик проекта PRK → показываем расширенные роли
-          roleFacts = [
-            { title: "Менеджер внедрений:", value: safe(input.issue_responsible_implementer) },
-            { title: "Менеджер по продажам:", value: safe(input.issue_responsible_sales) },
-            { title: "Аналитик:", value: safe(input.issue_responsible_analytic) },
-            { title: "Специалист ТП:", value: safe(input.issue_responsible_tsupporter) },
-            { title: "Дата комментария:", value: safe(input.comment_created) }
-          ].filter(f => f.value && f.value !== "-");
-        } else if (isEpic) {
-          // Эпик другого проекта → стандартные поля
-          roleFacts = [
-            { title: "Исполнитель:", value: safe(input.assignee) },
-            { title: "Автор:", value: safe(input.reporter) },
-            { title: "Дата комментария:", value: safe(input.comment_created) }
-          ];
-        } else {
-          // Обычные задачи / подзадачи
-          roleFacts = [
-            { title: "Автор:", value: safe(input.reporter) },
-            { title: "Исполнитель:", value: safe(input.assignee) },
-            { title: "Дата комментария:", value: safe(input.comment_created) }
-          ];
-        }
-
-        // 🔹 Формируем тело карточки
-        const card = {
-          type: "AdaptiveCard",
-          version: "1.5",
-          body: [
-            {
-              type: "TextBlock",
-              text: "powered by IM LLC / Proceset",
-              size: "Small",
-              horizontalAlignment: "Right",
-              isSubtle: true,
-              spacing: "None"
-            },
-            {
-              type: "Container",
-              items: [
-                { type: "Badge", text: badgeText, size: "Large", style: "Accent", icon: "CommentAdd" },
-                {
-                  type: "TextBlock",
-                  text: `**[${safe(input.issue_key)}]** ${safe(input.issue_summary)}`,
-                  wrap: true,
-                  weight: "Bolder",
-                  size: "Medium",
-                  spacing: "Small"
-                }
-              ],
-              style: "accent",
-              showBorder: true,
-              roundedCorners: true,
-              spacing: "Medium"
-            },
-            {
-              type: "TextBlock",
-              text: `**${safe(input.comment_author)}** пишет:`,
-              wrap: true,
-              spacing: "Small"
-            },
-            {
-              type: "Container",
-              items: [
-                {
-                  type: "RichTextBlock",
-                  inlines: [
-                    { type: "TextRun", text: `${safe(input.comment_body)}`, wrap: true }
-                  ]
-                }
-              ],
-              style: "emphasis",
-              spacing: "None"
-            },
-            ...(contextBlock ? [contextBlock] : []),
-            {
-              type: "FactSet",
-              facts: roleFacts,
-              spacing: "Medium"
-            }
-          ],
-          actions: [
-            {
-              type: "Action.OpenUrl",
-              title: openButtonTitle,
-              url: safe(issueUrl),
-              style: "positive"
-            }
-          ],
-          data: { targetEmails }
-        };
-
-        // 🔹 Отправка карточки
-        let response;
-        try {
-          response = service.request({
-            url: webhookUrl,
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-ms-client-request-id": sendUid
-            },
-            jsonBody: { payload: JSON.stringify(card) }
-          });
-        } catch (e) {
-          throw new Error("Ошибка при выполнении запроса: " + e.message);
-        }
-
-        const duration = Date.now() - start;
-        const respBody = new TextDecoder().decode(response.response || new TextEncoder().encode(""));
-
-        if (response.status < 200 || response.status >= 300)
-          throw new Error(`Ошибка отправки карточки: ${response.status} ${respBody || ""}`);
-
-        // 🔹 Возврат результатов
-        return {
-          output: [[
-            response?.status >= 200 && response?.status < 300
-              ? "Карточка успешно отправлена"
-              : "Карточка не отправлена",
-            String(response?.status) ?? null,
-            sendTime ?? null,
-            duration ?? null,
-            Array.isArray(targetEmails) ? targetEmails.join(", ") : null,
-            webhookUrl ? webhookUrl.slice(0, 50) + "..." : null,
-            sendUid ?? null
-          ]],
-          output_variables: [
-            { name: "message", type: "String" },
-            { name: "status", type: "String" },
-            { name: "send_time", type: "DateTime" },
-            { name: "duration_ms", type: "Double" },
-            { name: "recipients", type: "String" },
-            { name: "flow_endpoint", type: "String" },
-            { name: "send_uid", type: "String" }
-          ],
-          state: undefined,
-          hasNext: false
-        };
-      }
+      executePagination: (service, bundle) => executeJiraBlock(service, 'comment', bundle)
     },
-    SendTeamsAdaptiveCard_IssueStatusChanged_Generic: {
-      label: "Изменение статуса в задаче (Универсальный)",
+    StatusChange: {
+      label: "Изменение статуса в задаче creator_name",
       description: "Отправляет адаптивную карточку в Teams, автоматически определяя тип сущности Jira",
       inputFields: [
-        { key: "issue_key", label: "issue_key", type: "text", required: true },
-        { key: "issue_summary", label: "issue_summary", type: "text", required: true },
-        { key: "issue_url", label: "issue_url", type: "text", required: true },
-        { key: "issue_type", label: "issue_type", type: "text", required: true },
-        { key: "issue_type_name", label: "issue_type_name", type: "text", required: true },
-        { key: "from_status", label: "from_status", type: "text", required: true },
-        { key: "to_status", label: "to_status", type: "text", required: true },
-        { key: "created_by", label: "created_by", type: "text", required: true },
-        { key: "epic_key", label: "epic_key", type: "text" },
-        { key: "epic_summary", label: "epic_summary", type: "text" },
-        { key: "parent_key", label: "parent_key", type: "text" },
-        { key: "parent_summary", label: "parent_summary", type: "text" },
-        { key: "reporter", label: "reporter_name", type: "text" },
-        { key: "assignee", label: "assignee_name", type: "text" },
-        { key: "issue_responsible_implementer", label: "issue_responsible_implementer", type: "text" },
-        { key: "issue_responsible_sales", label: "issue_responsible_sales", type: "text" },
-        { key: "issue_responsible_analytic", label: "issue_responsible_analytic", type: "text" },
-        { key: "issue_responsible_tsupporter", label: "issue_responsible_tsupporter", type: "text" },
-        { key: "created_at", label: "created_at", type: "text" },
-        { key: "target_emails", label: "target_emails", type: "text", required: true }
+        { key: "issue_key", label: "Ключ задачи", type: "text", hint: "issue_key", required: true },
+        { key: "issue_summary", label: "Название задачи", type: "text", hint: "issue_summary", required: true },
+        { key: "issue_type", label: "Тип задачи", type: "text", hint: "issue_type", required: true },
+        { key: "issue_type_name", label: "Название типа задачи", type: "text", hint: "issue_type_name", required: true },
+        { key: "from_status", label: "Статус до изменения", type: "text", hint: "from_status", required: true },
+        { key: "to_status", label: "Статус после изменения", type: "text", hint: "to_status", required: true },
+        { key: "created_by", label: "Инициатор изменения", type: "text", hint: "created_by", required: true },
+        { key: "context_issue_key", label: "Ключ контекстной задачи", type: "text", hint: "context_issue_key (если задача - то ссылка на эпик, если подзадача, то ссылка на родителя)" },
+        { key: "context_issue_summary", label: "Название контекстной задачи", type: "text", hint: "context_issue_summary (если задача - то ссылка на эпик, если подзадача, то ссылка на родителя)" },
+        { key: "reporter", label: "Автор задачи", type: "text", hint: "reporter" },
+        { key: "assignee", label: "Исполнитель задачи", type: "text", hint: "assignee" },
+        { key: "issue_responsible_implementer", label: "Ответственный за внедрение", type: "text", hint: "issue_responsible_implementer" },
+        { key: "issue_responsible_sales", label: "Ответственный за продажи", type: "text", hint: "issue_responsible_sales" },
+        { key: "issue_responsible_analytic", label: "Ответственный аналитик", type: "text", hint: "issue_responsible_analytic" },
+        { key: "issue_responsible_tsupporter", label: "Ответственный специалист ТП", type: "text", hint: "issue_responsible_tsupporter" },
+        { key: "created_at", label: "Дата изменения", type: "text", hint: "created_at" },
+        { key: "target_emails", label: "Получатели уведомления", type: "text", hint: "target_emails", required: true }
       ],
 
-      executePagination: (service, bundle) => {
-        const input = bundle.inputData;
-        const safe = s => (s ? String(s).replace(/[\r\n]+/g, " ").replace(/\"/g, "'") : "-");
-
-        const webhookUrl = bundle.authData.incoming_webhook_url;
-        const jiraBaseUrl = (bundle.authData.jira_base_url || "").replace(/\/$/, "");
-        const targetEmails = (input.target_emails || "")
-          .split(",").map(e => e.trim()).filter(Boolean);
-
-        const sendUid = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-        const sendTime = new Date().toISOString();
-        const start = Date.now();
-
-        const issueUrl = input.issue_url || `${jiraBaseUrl}/browse/${safe(input.issue_key)}`;
-        const epicUrl = input.epic_key ? `${jiraBaseUrl}/browse/${safe(input.epic_key)}` : null;
-        const parentUrl = input.parent_key ? `${jiraBaseUrl}/browse/${safe(input.parent_key)}` : null;
-
-        // 🔹 Определяем тип задачи и проект
-        const issueType = input.issue_type?.toLowerCase() || "";
-        const projectKey = (input.issue_key?.split("-")[0] || "").toUpperCase();
-        const isEpic = issueType === "epic";
-        const isPRK = projectKey === "PRK";
-
-        // 🔹 Заголовок бейджа и контекстный блок
-        let badgeText = "";
-        let contextBlock = null;
-        let openButtonTitle = "Открыть задачу";
-
-        switch (issueType) {
-          case "epic":
-            badgeText = `Изменение статуса в Epic: ${safe(input.from_status)} → ${safe(input.to_status)}`;
-            openButtonTitle = "Открыть Epic";
-            break;
-          case "subtask":
-            badgeText = `Изменение статуса в подзадаче: ${safe(input.from_status)} → ${safe(input.to_status)}`;
-            openButtonTitle = "Открыть подзадачу";
-            if (input.parent_key && input.parent_summary) {
-              contextBlock = {
-                type: "RichTextBlock",
-                inlines: [
-                  { type: "TextRun", text: "Родительская задача: ", weight: "Bolder" },
-                  {
-                    type: "TextRun",
-                    text: `[${safe(input.parent_key)}] ${safe(input.parent_summary)}`,
-                    color: "Accent",
-                    selectAction: { type: "Action.OpenUrl", url: parentUrl }
-                  }
-                ]
-              };
-            }
-            break;
-          default:
-            badgeText = `Изменение статуса в задаче: ${safe(input.from_status)} → ${safe(input.to_status)}`;
-            openButtonTitle = "Открыть задачу";
-            if (input.epic_key && input.epic_summary) {
-              contextBlock = {
-                type: "RichTextBlock",
-                inlines: [
-                  { type: "TextRun", text: "Эпик: ", weight: "Bolder" },
-                  {
-                    type: "TextRun",
-                    text: `[${safe(input.epic_key)}] ${safe(input.epic_summary)}`,
-                    color: "Accent",
-                    selectAction: { type: "Action.OpenUrl", url: epicUrl }
-                  }
-                ]
-              };
-            }
-        }
-
-        // 🔹 Формируем секцию ролей (разные для PRK-эпиков и остальных)
-        let roleFacts = [];
-
-        if (isEpic && isPRK) {
-          // Эпик проекта PRK → показываем расширенные роли
-          roleFacts = [
-            { title: "Менеджер внедрений:", value: safe(input.issue_responsible_implementer) },
-            { title: "Менеджер по продажам:", value: safe(input.issue_responsible_sales) },
-            { title: "Аналитик:", value: safe(input.issue_responsible_analytic) },
-            { title: "Специалист ТП:", value: safe(input.issue_responsible_tsupporter) },
-            { title: "Дата изменения:", value: safe(input.created_at) }
-          ].filter(f => f.value && f.value !== "-");
-        } else if (isEpic) {
-          // Эпик другого проекта → стандартные поля
-          roleFacts = [
-            { title: "Исполнитель:", value: safe(input.assignee) },
-            { title: "Автор:", value: safe(input.reporter) },
-            { title: "Дата изменения:", value: safe(input.created_at) }
-          ];
-        } else {
-          // Обычные задачи / подзадачи
-          roleFacts = [
-            { title: "Автор:", value: safe(input.reporter) },
-            { title: "Исполнитель:", value: safe(input.assignee) },
-            { title: "Дата изменения:", value: safe(input.created_at) }
-          ];
-        }
-
-        // 🔹 Формируем тело карточки
-        const card = {
-          type: "AdaptiveCard",
-          version: "1.5",
-          body: [
-            {
-              type: "TextBlock",
-              text: "powered by IM LLC / Proceset",
-              size: "Small",
-              horizontalAlignment: "Right",
-              isSubtle: true,
-              spacing: "None"
-            },
-            {
-              type: "Container",
-              items: [
-                { type: "Badge", text: badgeText, size: "Large", style: "Accent", icon: "ArrowSync" },
-                {
-                  type: "TextBlock",
-                  text: `**[${safe(input.issue_key)}]** ${safe(input.issue_summary)}`,
-                  wrap: true,
-                  weight: "Bolder",
-                  size: "Medium",
-                  spacing: "Small"
-                }
-              ],
-              style: "accent",
-              showBorder: true,
-              roundedCorners: true,
-              spacing: "Medium"
-            },
-            {
-              type: "TextBlock",
-              text: `**Инициатор:** ${safe(input.created_by)}`,
-              wrap: true,
-              spacing: "Small"
-            },
-            ...(contextBlock ? [contextBlock] : []),
-            {
-              type: "FactSet",
-              facts: roleFacts,
-              spacing: "Medium"
-            }
-          ],
-          actions: [
-            {
-              type: "Action.OpenUrl",
-              title: openButtonTitle,
-              url: safe(issueUrl),
-              style: "positive"
-            }
-          ],
-          data: { targetEmails }
-        };
-
-        // 🔹 Отправка карточки
-        let response;
-        try {
-          response = service.request({
-            url: webhookUrl,
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-ms-client-request-id": sendUid
-            },
-            jsonBody: { payload: JSON.stringify(card) }
-          });
-        } catch (e) {
-          throw new Error("Ошибка при выполнении запроса: " + e.message);
-        }
-
-        const duration = Date.now() - start;
-        const respBody = new TextDecoder().decode(response.response || new TextEncoder().encode(""));
-
-        if (response.status < 200 || response.status >= 300)
-          throw new Error(`Ошибка отправки карточки: ${response.status} ${respBody || ""}`);
-
-        // 🔹 Возврат результатов
-        return {
-          output: [[
-            response?.status >= 200 && response?.status < 300
-              ? "Карточка успешно отправлена"
-              : "Карточка не отправлена",
-            String(response?.status) ?? null,
-            sendTime ?? null,
-            duration ?? null,
-            Array.isArray(targetEmails) ? targetEmails.join(", ") : null,
-            webhookUrl ? webhookUrl.slice(0, 50) + "..." : null,
-            sendUid ?? null
-          ]],
-          output_variables: [
-            { name: "message", type: "String" },
-            { name: "status", type: "String" },
-            { name: "send_time", type: "DateTime" },
-            { name: "duration_ms", type: "Double" },
-            { name: "recipients", type: "String" },
-            { name: "flow_endpoint", type: "String" },
-            { name: "send_uid", type: "String" }
-          ],
-          state: undefined,
-          hasNext: false
-        };
-      }
+      executePagination: (service, bundle) => executeJiraBlock(service, 'status', bundle)
     },
-    SendTeamsAdaptiveCard_NewIssueWhereYouAreAssignee_Generic: {
-      label: "Новая задача, где ты — Исполнитель (Универсальный)",
+    NewIssueAssignee: {
+      label: "Новая задача, где ты — Исполнитель creator_name",
       description: "Отправляет адаптивную карточку в Teams с событием \"Новая задача JIRA, где ты — Исполнитель\", автоматически определяя тип сущности Jira",
       inputFields: [
         { key: "issue_key", label: "Ключ задачи", type: "text", hint: "issue_key", required: true },
         { key: "issue_summary", label: "Название задачи", type: "text", hint: "issue_summary", required: true },
-        { key: "issue_url", label: "URL задачи", type: "text", hint: "issue_url", required: true },
         { key: "issue_type", label: "Тип задачи", type: "text", hint: "issue_type", required: true },
         { key: "issue_type_name", label: "Название типа задачи", type: "text", hint: "issue_type_name", required: true },
         { key: "issue_description", label: "Описание задачи", type: "text", hint: "issue_description", required: true },
-        { key: "epic_key", label: "Ключ эпика", type: "text", hint: "epic_key" },
-        { key: "epic_summary", label: "Название эпика", type: "text", hint: "epic_summary" },
-        { key: "epic_link", label: "URL эпика", type: "text", hint: "epic_link" },
-        { key: "parent_key", label: "Ключ родительской задачи", type: "text", hint: "parent_key" },
-        { key: "parent_summary", label: "Название родительской задачи", type: "text", hint: "parent_summary" },
+        { key: "context_issue_key", label: "Ключ контекстной задачи", type: "text", hint: "context_issue_key (если задача - то ссылка на эпик, если подзадача, то ссылка на родителя)" },
+        { key: "context_issue_summary", label: "Название контекстной задачи", type: "text", hint: "context_issue_summary (если задача - то ссылка на эпик, если подзадача, то ссылка на родителя)" },
         { key: "reporter", label: "Автор задачи", type: "text", hint: "reporter" },
+        { key: "created_by", label: "Создатель задачи", type: "text", hint: "created_by", required: true },
         { key: "created_at", label: "Дата создания", type: "text", hint: "created_at" },
         { key: "due_date", label: "Дата исполнения", type: "text", hint: "due_date" },
         { key: "issue_responsible_implementer", label: "Ответственный за внедрение", type: "text", hint: "issue_responsible_implementer" },
@@ -496,461 +555,29 @@ app = {
         { key: "issue_responsible_tsupporter", label: "Ответственный специалист ТП", type: "text", hint: "issue_responsible_tsupporter" },
         { key: "target_emails", label: "Получатели уведомления", type: "text", hint: "target_emails (E-mail адреса через запятую)", required: true }
       ],
-      executePagination: (service, bundle) => {
-        const webhookUrl = bundle.authData.incoming_webhook_url;
-        if (!webhookUrl) {
-          throw new Error("URL вебхука не указан. Заполните поле и повторите попытку.");
-        }
-
-        const jiraBaseUrl = (bundle.authData.jira_base_url || "").replace(/\/$/, "");
-        if (!jiraBaseUrl) {
-          throw new Error('В настойках подключения не указан jiraBaseUrl. Заполните поле и повторите попытку.')
-        }
-
-        const safe = s => (s ? String(s).replace(/[\r\n]+/g, " ").replace(/\"/g, "'") : "-");
-        const input = bundle.inputData;
-        const targetEmails = (input.target_emails || "")
-          .split(",").map(e => e.trim()).filter(Boolean);
-        const sendTime = new Date().toISOString();
-        const sendUid = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-
-        const issueUrl =
-          input.issue_url &&
-            input.issue_url.trim() !== "" &&
-            (input.issue_url.startsWith("http://") || input.issue_url.startsWith("https://"))
-            ? input.issue_url
-            : `${jiraBaseUrl}/browse/${safe(input.issue_key)}`;
-
-        const epicUrl =
-          input.epic_link &&
-            input.epic_link.trim() !== "" &&
-            (input.epic_link.startsWith("http://") || input.epic_link.startsWith("https://"))
-            ? input.epic_link
-            : input.epic_key ? `${jiraBaseUrl}/browse/${safe(input.epic_key)}` : null;
-
-        const parentUrl = input.parent_key ? `${jiraBaseUrl}/browse/${safe(input.parent_key)}` : null;
-
-        // 🔹 Определяем тип задачи и проект
-        const issueType = input.issue_type?.toLowerCase() || "";
-        const projectKey = (input.issue_key?.split("-")[0] || "").toUpperCase();
-        const isEpic = issueType === "epic";
-        const isPRK = projectKey === "PRK";
-
-        // 🔹 Заголовок бейджа и контекстный блок
-        let badgeText = "";
-        let contextBlock = null;
-        let openButtonTitle = "Открыть задачу";
-
-        switch (issueType) {
-          case "epic":
-            badgeText = "Новый Epic, где ты — Исполнитель";
-            openButtonTitle = "Открыть Epic";
-            break;
-          case "subtask":
-            badgeText = "Новая подзадача, где ты — Исполнитель";
-            openButtonTitle = "Открыть подзадачу";
-            if (input.parent_key && input.parent_summary) {
-              contextBlock = {
-                type: "RichTextBlock",
-                inlines: [
-                  { type: "TextRun", text: "Родительская задача: ", weight: "Bolder" },
-                  {
-                    type: "TextRun",
-                    text: `[${safe(input.parent_key)}] ${safe(input.parent_summary)}`,
-                    color: "Accent",
-                    selectAction: { type: "Action.OpenUrl", url: parentUrl }
-                  }
-                ]
-              };
-            }
-            break;
-          default:
-            badgeText = "Новая задача, где ты — Исполнитель";
-            openButtonTitle = "Открыть задачу";
-            if (input.epic_key && input.epic_summary) {
-              contextBlock = {
-                type: "RichTextBlock",
-                inlines: [
-                  { type: "TextRun", text: "Эпик: ", weight: "Bolder" },
-                  {
-                    type: "TextRun",
-                    text: `[${safe(input.epic_key)}] ${safe(input.epic_summary)}`,
-                    color: "Accent",
-                    selectAction: { type: "Action.OpenUrl", url: epicUrl }
-                  }
-                ]
-              };
-            }
-        }
-
-        // 🔹 Формируем секцию ролей (разные для PRK-эпиков и остальных)
-        let roleFacts = [];
-
-        if (isEpic && isPRK) {
-          // Эпик проекта PRK → показываем расширенные роли
-          roleFacts = [
-            { title: "Менеджер внедрений:", value: safe(input.issue_responsible_implementer) },
-            { title: "Менеджер по продажам:", value: safe(input.issue_responsible_sales) },
-            { title: "Аналитик:", value: safe(input.issue_responsible_analytic) },
-            { title: "Специалист ТП:", value: safe(input.issue_responsible_tsupporter) },
-            { title: "Дата регистрации:", value: safe(input.created_at) },
-          ].filter(f => f.value && f.value !== "-");
-        } else {
-          // Обычные задачи / подзадачи и эпики других проектов
-          roleFacts = [
-            { title: "Автор:", value: safe(input.reporter) },
-            { title: "Дата регистрации:", value: safe(input.created_at) },
-            { title: "Дата исполнения:", value: safe(input.due_date) }
-          ];
-        }
-
-        const card = {
-          type: "AdaptiveCard",
-          version: "1.5",
-          body: [
-            {
-              type: "TextBlock",
-              text: "powered by IM LLC / Proceset",
-              size: "Small",
-              horizontalAlignment: "Right",
-              isSubtle: true,
-              spacing: "None"
-            },
-            {
-              type: "Container",
-              items: [
-                {
-                  type: "Badge",
-                  text: badgeText,
-                  size: "Large",
-                  style: "Attention",
-                  icon: "PersonSquare"
-                },
-                {
-                  type: "TextBlock",
-                  text: `**[${safe(input.issue_key)}]** ${safe(input.issue_summary)}`,
-                  wrap: true,
-                  weight: "Bolder",
-                  size: "Medium",
-                  spacing: "Small"
-                }
-              ],
-              style: "accent",
-              showBorder: true,
-              roundedCorners: true,
-              spacing: "Medium"
-            },
-            {
-              type: "TextBlock",
-              text: `**Инициатор:** ${safe(input.created_by)}`,
-              wrap: true,
-              spacing: "Small"
-            },
-            {
-              type: "TextBlock",
-              text: "**Описание:**",
-              wrap: true,
-              spacing: "Small"
-            },
-            {
-              type: "Container",
-              items: [
-                {
-                  type: "TextBlock",
-                  text: `${safe(input.issue_description)}`,
-                  wrap: true
-                }
-              ],
-              style: "emphasis",
-              spacing: "None"
-            },
-            ...(contextBlock ? [contextBlock] : []),
-            {
-              type: "FactSet",
-              facts: roleFacts,
-              spacing: "Medium"
-            }
-          ],
-          actions: [
-            {
-              type: "Action.OpenUrl",
-              title: openButtonTitle,
-              url: safe(issueUrl),
-              style: "positive",
-              iconUrl: "icon:Link"
-            }
-          ],
-          data: { targetEmails }
-        };
-
-        let response;
-        const start = Date.now();
-        const stringifiedCard = JSON.stringify(card);
-        try {
-          response = service.request({
-            url: webhookUrl,
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-ms-client-request-id": sendUid
-            },
-            jsonBody: { payload: stringifiedCard }
-          });
-        } catch (e) {
-          throw new Error("Ошибка при выполнении запроса: " + e.message);
-        }
-        const duration = Date.now() - start;
-
-        if (!response.response && response.status === 202) {
-          response.response = new TextEncoder().encode("OK");
-        }
-
-        const respBody = new TextDecoder().decode(response.response);
-        if (response.status < 200 || response.status >= 300) {
-          throw new Error(`Ошибка отправки карточки: ${response.status} ${respBody || ""}`);
-        }
-        return {
-          output: [[
-            response?.status >= 200 && response?.status < 300 ? "Карточка успешно отправлена" : "Карточка не отправлена",
-            String(response?.status) ?? null,
-            sendTime ?? null,
-            duration ?? null,
-            Array.isArray(targetEmails) ? targetEmails.join(", ") : null,
-            webhookUrl ? webhookUrl.slice(0, 50) + "..." : null,
-            sendUid ?? null
-          ]],
-          output_variables: [
-            { name: "message", type: "String" },
-            { name: "status", type: "String" },
-            { name: "send_time", type: "DateTime" },
-            { name: "duration_ms", type: "Double" },
-            { name: "recipients", type: "String" },
-            { name: "flow_endpoint", type: "String" },
-            { name: "send_uid", type: "String" }
-          ],
-          state: undefined,
-          hasNext: false
-        };
-      }
+      executePagination: (service, bundle) => executeJiraBlock(service, 'assignee', bundle)
     },
-    SendTeamsAdaptiveCard_NewNestedIssue_Generic: {
-      label: "Новая вложенная задача//подзадача (Универсальный)",
+    NewNestedIssue: {
+      label: "Новая вложенная задача/подзадача creator_name",
       description: "Отправляет адаптивную карточку в Teams для новых задач и подзадач (исключая эпики, которые обрабатываются отдельным блоком)",
       inputFields: [
-        { key: "issue_key", label: "issue_key", type: "text", required: true },
-        { key: "issue_summary", label: "issue_summary", type: "text", required: true },
-        { key: "issue_url", label: "issue_url", type: "text", required: true },
-        { key: "issue_type", label: "issue_type", type: "text", required: true },
-        { key: "issue_type_name", label: "issue_type_name", type: "text", required: true },
-        { key: "issue_description", label: "issue_description", type: "text", required: true },
-        { key: "epic_key", label: "epic_key", type: "text" },
-        { key: "epic_summary", label: "epic_summary", type: "text" },
-        { key: "parent_key", label: "parent_key", type: "text" },
-        { key: "parent_summary", label: "parent_summary", type: "text" },
-        { key: "reporter", label: "reporter_name", type: "text" },
-        { key: "assignee", label: "assignee_name", type: "text" },
-        { key: "created_at", label: "created_at", type: "text" },
-        { key: "target_emails", label: "target_emails", type: "text", required: true }
+        { key: "issue_key", label: "Ключ задачи", type: "text", hint: "issue_key", required: true },
+        { key: "issue_summary", label: "Название задачи", type: "text", hint: "issue_summary", required: true },
+        { key: "issue_type", label: "Тип задачи", type: "text", hint: "issue_type", required: true },
+        { key: "issue_type_name", label: "Название типа задачи", type: "text", hint: "issue_type_name", required: true },
+        { key: "issue_description", label: "Описание задачи", type: "text", hint: "issue_description", required: true },
+        { key: "context_issue_key", label: "Ключ контекстной задачи", type: "text", hint: "context_issue_key (если задача - то ссылка на эпик, если подзадача, то ссылка на родителя)" },
+        { key: "context_issue_summary", label: "Название контекстной задачи", type: "text", hint: "context_issue_summary (если задача - то ссылка на эпик, если подзадача, то ссылка на родителя)" },
+        { key: "reporter", label: "Автор задачи", type: "text", hint: "reporter" },
+        { key: "created_by", label: "Создатель задачи", type: "text", hint: "created_by", required: true },
+        { key: "assignee", label: "Исполнитель задачи", type: "text", hint: "assignee" },
+        { key: "created_at", label: "Дата создания", type: "text", hint: "created_at" },
+        { key: "target_emails", label: "Получатели уведомления", type: "text", hint: "target_emails", required: true }
       ],
 
-      executePagination: (service, bundle) => {
-        const input = bundle.inputData;
-        const safe = s => (s ? String(s).replace(/[\r\n]+/g, " ").replace(/\"/g, "'") : "-");
-
-        const webhookUrl = bundle.authData.incoming_webhook_url;
-        const jiraBaseUrl = (bundle.authData.jira_base_url || "").replace(/\/$/, "");
-        const targetEmails = (input.target_emails || "")
-          .split(",").map(e => e.trim()).filter(Boolean);
-
-        const sendUid = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-        const sendTime = new Date().toISOString();
-        const start = Date.now();
-
-        const issueUrl = input.issue_url || `${jiraBaseUrl}/browse/${safe(input.issue_key)}`;
-        const epicUrl = input.epic_key ? `${jiraBaseUrl}/browse/${safe(input.epic_key)}` : null;
-        const parentUrl = input.parent_key ? `${jiraBaseUrl}/browse/${safe(input.parent_key)}` : null;
-
-        // 🔹 Определяем тип задачи (обрабатываем только задачи и подзадачи, эпики - отдельным блоком)
-        const issueType = input.issue_type?.toLowerCase() || "";
-
-        // 🔹 Формируем заголовок бейджа и контекстный блок в зависимости от типа
-        let badgeText = "";
-        let contextBlock = null;
-        let openButtonTitle = "Открыть задачу";
-
-        switch (issueType) {
-          case "subtask":
-            badgeText = "Новая подзадача";
-            openButtonTitle = "Открыть подзадачу";
-            if (input.parent_key && input.parent_summary) {
-              contextBlock = {
-                type: "RichTextBlock",
-                inlines: [
-                  { type: "TextRun", text: "Родительская задача: ", weight: "Bolder" },
-                  {
-                    type: "TextRun",
-                    text: `[${safe(input.parent_key)}] ${safe(input.parent_summary)}`,
-                    color: "Accent",
-                    selectAction: { type: "Action.OpenUrl", url: parentUrl }
-                  }
-                ]
-              };
-            }
-            break;
-          default:
-            badgeText = "Новая задача";
-            openButtonTitle = "Открыть задачу";
-            if (input.epic_key && input.epic_summary) {
-              contextBlock = {
-                type: "RichTextBlock",
-                inlines: [
-                  { type: "TextRun", text: "Эпик: ", weight: "Bolder" },
-                  {
-                    type: "TextRun",
-                    text: `[${safe(input.epic_key)}] ${safe(input.epic_summary)}`,
-                    color: "Accent",
-                    selectAction: { type: "Action.OpenUrl", url: epicUrl }
-                  }
-                ]
-              };
-            }
-        }
-
-        // 🔹 Формируем секцию с информацией о ролях (универсальный набор)
-        const roleFacts = [
-          { title: "Автор:", value: safe(input.reporter) },
-          { title: "Исполнитель:", value: safe(input.assignee) },
-          { title: "Дата регистрации:", value: safe(input.created_at) }
-        ];
-
-        // 🔹 Формируем тело карточки
-        const card = {
-          type: "AdaptiveCard",
-          version: "1.5",
-          body: [
-            {
-              type: "TextBlock",
-              text: "powered by IM LLC / Proceset",
-              size: "Small",
-              horizontalAlignment: "Right",
-              isSubtle: true,
-              spacing: "None"
-            },
-            {
-              type: "Container",
-              items: [
-                { type: "Badge", text: badgeText, size: "Large", style: "Good", icon: "PersonSquare" },
-                {
-                  type: "TextBlock",
-                  text: `**[${safe(input.issue_key)}]** ${safe(input.issue_summary)}`,
-                  wrap: true,
-                  weight: "Bolder",
-                  size: "Medium",
-                  spacing: "Small"
-                }
-              ],
-              style: "accent",
-              showBorder: true,
-              roundedCorners: true,
-              spacing: "Medium"
-            },
-            {
-              type: "TextBlock",
-              text: `**Инициатор:** ${safe(input.reporter)}`,
-              wrap: true,
-              spacing: "Small"
-            },
-            {
-              type: "TextBlock",
-              text: "**Описание задачи:**",
-              wrap: true,
-              spacing: "Small"
-            },
-            {
-              type: "Container",
-              items: [
-                {
-                  type: "RichTextBlock",
-                  inlines: [
-                    {
-                      type: "TextRun",
-                      text: `${safe(input.issue_description)}`
-                    }
-                  ]
-                }
-              ],
-              style: "emphasis",
-              spacing: "None"
-            },
-            ...(contextBlock ? [contextBlock] : []),
-            {
-              type: "FactSet",
-              facts: roleFacts,
-              spacing: "Medium"
-            }
-          ],
-          actions: [
-            {
-              type: "Action.OpenUrl",
-              title: openButtonTitle,
-              url: safe(issueUrl),
-              style: "positive",
-              iconUrl: "icon:Link"
-            }
-          ],
-          data: { targetEmails }
-        };
-
-        // 🔹 Отправка карточки
-        let response;
-        try {
-          response = service.request({
-            url: webhookUrl,
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-ms-client-request-id": sendUid
-            },
-            jsonBody: { payload: JSON.stringify(card) }
-          });
-        } catch (e) {
-          throw new Error("Ошибка при выполнении запроса: " + e.message);
-        }
-
-        const duration = Date.now() - start;
-        const respBody = new TextDecoder().decode(response.response || new TextEncoder().encode(""));
-
-        if (response.status < 200 || response.status >= 300)
-          throw new Error(`Ошибка отправки карточки: ${response.status} ${respBody || ""}`);
-
-        // 🔹 Возврат результатов
-        return {
-          output: [[
-            response?.status >= 200 && response?.status < 300
-              ? "Карточка успешно отправлена"
-              : "Карточка не отправлена",
-            String(response?.status) ?? null,
-            sendTime ?? null,
-            duration ?? null,
-            Array.isArray(targetEmails) ? targetEmails.join(", ") : null,
-            webhookUrl ? webhookUrl.slice(0, 50) + "..." : null,
-            sendUid ?? null
-          ]],
-          output_variables: [
-            { name: "message", type: "String" },
-            { name: "status", type: "String" },
-            { name: "send_time", type: "DateTime" },
-            { name: "duration_ms", type: "Double" },
-            { name: "recipients", type: "String" },
-            { name: "flow_endpoint", type: "String" },
-            { name: "send_uid", type: "String" }
-          ],
-          state: undefined,
-          hasNext: false
-        };
-      }
+      executePagination: (service, bundle) => executeJiraBlock(service, 'nested', bundle)
     },
-    SendTeamsAdaptiveCard_NewAdaptiveCardAdded: {
+    NewCardType: {
       label: "Добавлен новый тип уведомления (Системное)",
       description: "Отправляет адаптивную карточку в Teams при добавлении нового типа уведомления в системе Jira → Teams.",
       inputFields: [
@@ -961,145 +588,22 @@ app = {
         { key: "target_emails", label: "Список получателей (через запятую)", hint: "target_emails", type: "text", required: true }
       ],
 
-      executePagination: (service, bundle) => {
-        const input = bundle.inputData;
-        const safe = s => (s ? String(s).replace(/[\r\n]+/g, " ").replace(/\"/g, "'") : "-");
-
-        const webhookUrl = bundle.authData.incoming_webhook_url;
-        const targetEmails = (input.target_emails || "")
-          .split(",").map(e => e.trim()).filter(Boolean);
-
-        const sendUid = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-        const sendTime = new Date().toISOString();
-        const start = Date.now();
-
-        const card = {
-          type: "AdaptiveCard",
-          version: "1.5",
-          body: [
-            {
-              type: "TextBlock",
-              text: "powered by IM LLC / Proceset",
-              size: "Small",
-              horizontalAlignment: "Right",
-              isSubtle: true,
-              spacing: "None"
-            },
-            {
-              type: "Container",
-              style: "accent",
-              showBorder: true,
-              roundedCorners: true,
-              spacing: "Medium",
-              items: [
-                {
-                  type: "Badge",
-                  text: "Системное уведомление",
-                  size: "Large",
-                  style: "Good",
-                  icon: "MegaphoneLoud",
-                  horizontalAlignment: "Center"
-                },
-                {
-                  type: "TextBlock",
-                  text: "**Добавлен новый тип уведомления**",
-                  wrap: true,
-                  weight: "Bolder",
-                  size: "Medium",
-                  spacing: "Small",
-                  horizontalAlignment: "Center"
-                }
-              ]
-            },
-            {
-              type: "TextBlock",
-              text: `Приветствуем, ${safe(input.employee_name)}!`,
-              wrap: true,
-              spacing: "Large",
-              horizontalAlignment: "Center"
-            },
-            {
-              type: "TextBlock",
-              text: "Спешим сообщить, что в системе уведомлений Jira → Teams стал доступен новый тип уведомлений. Ты можешь с ним подробно ознакомиться ниже:",
-              wrap: true,
-              spacing: "Large",
-              isSubtle: true
-            },
-            {
-              type: "FactSet",
-              facts: [
-                { title: "Тип:", value: `**${safe(input.card_name_ru)}**` },
-                { title: "Дата добавления:", value: safe(input.created_at) }
-              ]
-            },
-            {
-              type: "ActionSet",
-              actions: [
-                {
-                  type: "Action.OpenUrl",
-                  title: "Перейти в отчет",
-                  style: "positive",
-                  url: safe(input.dashboard_url),
-                  iconUrl: "icon:Link"
-                }
-              ],
-              horizontalAlignment: "Right",
-              spacing: "ExtraLarge"
-            }
-          ],
-          data: { targetEmails }
-        };
-
-        // Отправка карточки
-        let response;
-        try {
-          response = service.request({
-            url: webhookUrl,
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-ms-client-request-id": sendUid
-            },
-            jsonBody: { payload: JSON.stringify(card) }
-          });
-        } catch (e) {
-          throw new Error("Ошибка при выполнении запроса: " + e.message);
-        }
-
-        const duration = Date.now() - start;
-        const respBody = new TextDecoder().decode(response.response || new TextEncoder().encode(""));
-
-        if (response.status < 200 || response.status >= 300)
-          throw new Error(`Ошибка отправки карточки: ${response.status} ${respBody || ""}`);
-
-        // 🔹 Возврат результатов
-        return {
-          output: [[
-            response?.status >= 200 && response?.status < 300
-              ? "Карточка успешно отправлена"
-              : "Карточка не отправлена",
-            String(response?.status) ?? null,
-            sendTime ?? null,
-            duration ?? null,
-            Array.isArray(targetEmails) ? targetEmails.join(", ") : null,
-            webhookUrl ? webhookUrl.slice(0, 50) + "..." : null,
-            sendUid ?? null
-          ]],
-          output_variables: [
-            { name: "message", type: "String" },
-            { name: "status", type: "String" },
-            { name: "send_time", type: "DateTime" },
-            { name: "duration_ms", type: "Double" },
-            { name: "recipients", type: "String" },
-            { name: "flow_endpoint", type: "String" },
-            { name: "send_uid", type: "String" }
-          ],
-          state: undefined,
-          hasNext: false
-        };
-      }
+      executePagination: (service, bundle) => executeSystemBlock(
+        service,
+        "accent",
+        "Системное уведомление",
+        "**Добавлен новый тип уведомления**",
+        `Приветствуем, ${safe(bundle.inputData.employee_name)}!`,
+        "Спешим сообщить, что в системе уведомлений Jira → Teams стал доступен новый тип уведомлений. Ты можешь с ним подробно ознакомиться ниже:",
+        [
+          { title: "Тип:", value: `**${safe(bundle.inputData.card_name_ru)}**` },
+          { title: "Дата добавления:", value: safe(bundle.inputData.created_at) }
+        ],
+        "Перейти в отчет",
+        bundle
+      )
     },
-    SendTeamsAdaptiveCard_NotificationTypeRemoved: {
+    RemoveCardType: {
       label: "Удален тип уведомления (Системное)",
       description: "Отправляет адаптивную карточку в Teams при удалении типа уведомления в системе Jira → Teams.",
       inputFields: [
@@ -1110,135 +614,20 @@ app = {
         { key: "target_emails", label: "Список получателей (через запятую)", hint: "target_emails", type: "text", required: true }
       ],
 
-      executePagination: (service, bundle) => {
-        const input = bundle.inputData;
-        const safe = s => (s ? String(s).replace(/[\r\n]+/g, " ").replace(/\"/g, "'") : "-");
-
-        const webhookUrl = bundle.authData.incoming_webhook_url;
-        const targetEmails = (input.target_emails || "")
-          .split(",").map(e => e.trim()).filter(Boolean);
-
-        const sendUid = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-        const sendTime = new Date().toISOString();
-        const start = Date.now();
-
-        const card = {
-          type: "AdaptiveCard",
-          version: "1.5",
-          body: [
-            {
-              type: "TextBlock",
-              text: "powered by IM LLC / Proceset",
-              size: "Small",
-              horizontalAlignment: "Right",
-              isSubtle: true,
-              spacing: "None"
-            },
-            {
-              type: "Container",
-              style: "attention",
-              showBorder: true,
-              roundedCorners: true,
-              spacing: "Medium",
-              items: [
-                {
-                  type: "Badge",
-                  text: "Системное уведомление",
-                  size: "Large",
-                  style: "Attention",
-                  icon: "Warning",
-                  horizontalAlignment: "Center"
-                },
-                {
-                  type: "TextBlock",
-                  text: "**Тип уведомления был удалён**",
-                  wrap: true,
-                  weight: "Bolder",
-                  size: "Medium",
-                  spacing: "Small",
-                  horizontalAlignment: "Center"
-                }
-              ]
-            },
-            {
-              type: "TextBlock",
-              text: `Приветствуем, ${safe(input.employee_name)}!`,
-              wrap: true,
-              spacing: "Large",
-              horizontalAlignment: "Center"
-            },
-            {
-              type: "TextBlock",
-              text: "Сообщаем, что один из типов уведомлений в системе Jira → Teams был удалён и больше не доступен для использования. ",
-              wrap: true,
-              spacing: "Large",
-              isSubtle: true
-            },
-            {
-              type: "FactSet",
-              facts: [
-                {
-                  title: "Удалённый тип:",
-                  value: `**${safe(input.card_name_ru)}**`
-                },
-                {
-                  title: "Дата удаления:",
-                  value: `${safe(input.deleted_at)}`
-                }
-              ]
-            }
-          ],
-          data: { targetEmails }
-        }
-
-        // Отправка карточки
-        let response;
-        try {
-          response = service.request({
-            url: webhookUrl,
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-ms-client-request-id": sendUid
-            },
-            jsonBody: { payload: JSON.stringify(card) }
-          });
-        } catch (e) {
-          throw new Error("Ошибка при выполнении запроса: " + e.message);
-        }
-
-        const duration = Date.now() - start;
-        const respBody = new TextDecoder().decode(response.response || new TextEncoder().encode(""));
-
-        if (response.status < 200 || response.status >= 300)
-          throw new Error(`Ошибка отправки карточки: ${response.status} ${respBody || ""}`);
-
-        // 🔹 Возврат результатов
-        return {
-          output: [[
-            response?.status >= 200 && response?.status < 300
-              ? "Карточка успешно отправлена"
-              : "Карточка не отправлена",
-            String(response?.status) ?? null,
-            sendTime ?? null,
-            duration ?? null,
-            Array.isArray(targetEmails) ? targetEmails.join(", ") : null,
-            webhookUrl ? webhookUrl.slice(0, 50) + "..." : null,
-            sendUid ?? null
-          ]],
-          output_variables: [
-            { name: "message", type: "String" },
-            { name: "status", type: "String" },
-            { name: "send_time", type: "DateTime" },
-            { name: "duration_ms", type: "Double" },
-            { name: "recipients", type: "String" },
-            { name: "flow_endpoint", type: "String" },
-            { name: "send_uid", type: "String" }
-          ],
-          state: undefined,
-          hasNext: false
-        };
-      }
+      executePagination: (service, bundle) => executeSystemBlock(
+        service,
+        "attention",
+        "Системное уведомление",
+        "**Тип уведомления был удалён**",
+        `Приветствуем, ${safe(bundle.inputData.employee_name)}!`,
+        "Сообщаем, что один из типов уведомлений в системе Jira → Teams был удалён и больше не доступен для использования.",
+        [
+          { title: "Удалённый тип:", value: `**${safe(bundle.inputData.card_name_ru)}**` },
+          { title: "Дата удаления:", value: safe(bundle.inputData.deleted_at) }
+        ],
+        null,
+        bundle
+      )
     }
   },
   connections: {
@@ -1249,16 +638,16 @@ app = {
         {
           key: "incoming_webhook_url",
           type: "password",
-          label: "Входящий вэб-перехватчик Teams Power AU Flow",
-          //placeholder: "https://<tenant-id>.db.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/...",
-          hint: "HTTP URL берется из блока-триггера \"When a Teams webhook request is received\" в рамках созданного потока Teams Power Automate",
+          label: "Входящий веб-перехватчик Teams Power Automate",
+          hint: "incoming_webhook_url",
           required: true
         },
         {
           key: "jira_base_url",
-          label: "Базовый URL Jira (пример: https://jira.company.com)",
+          label: "Базовый URL Jira",
           type: "text",
           placeholder: "https://example.jira.domain.name.com",
+          hint: "jira_base_url",
           required: true
         },
         {
