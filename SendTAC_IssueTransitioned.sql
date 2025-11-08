@@ -1,24 +1,45 @@
 --! SQL для subtask
 WITH
 
-  -- Парсим changelog_items, чтобы получить информацию о переходе статусов
-  arrayElement(changelog_items, 1) as first_json_from_array,
-  arrayElement(changelog_items, 2) as second_json_from_array,
+  -- Парсим changelog_items, чтобы получить информацию о переходе статусов в виде JSON
+  arrayElement(
+    arrayFilter(
+      json -> JSON_VALUE(json, '$.field')='status',
+      changelog_items), 
+      1) as status_change_json,
+      
+  -- Парсим changelog_items, чтобы получить информацию о наличии решения в виде JSON    
+  arrayElement(
+    arrayFilter(
+      json -> JSON_VALUE(json, '$.field')='resolution',
+      changelog_items), 
+      1) as resolution_json,
+      
+  -- Если был совершен переход в статус "Закрыто", вытягиваем из JSON значение для поле "Решение", в противном случае null       
   if(
-    JSON_VALUE(first_json_from_array, '$.field') = 'resolution',
-    JSON_VALUE(first_json_from_array, '$.toString'),
-    null
-  ) as resolution,
+    JSON_VALUE(status_change_json, '$.toString')='Закрыто', 
+    JSON_VALUE(resolution_json, '$.toString'), 
+    null) as resolution,
+    
+  -- Вытягиваем из JSON значение предыдущего статуса      
+    JSON_VALUE(status_change_json, '$.fromString') as from_status,
+    
+  -- Вытягиваем из JSON значение актуального статуса и соединяем с полем "Решение", если статус = Закрыто       
+    if(
+      isNotNull(resolution),
+      concat(JSON_VALUE(status_change_json, '$.toString'), ' (', resolution, ')'),
+      JSON_VALUE(status_change_json, '$.toString')
+  ) as to_status,
   
   -- Собираем массив наблюдателей для родительской задачи
   arrayMap(
     watcher -> JSONExtractString(watcher, 'emailAddress'),
-    JSONExtractArrayRaw(JSONExtractRaw(${a23.response}, 'watchers'))
+    JSONExtractArrayRaw(JSONExtractRaw(${a2.response}, 'watchers'))
   ) AS parent_watchers,
   
   -- Разрешённые email-адреса:
   --   активная глобальная подписка,
-  --   подписка на конкретное событие ("Изменение статуса задачи")
+  --   подписка на конкретное событие ("Изменение статуса")
   (
     SELECT
       lower(email)
@@ -68,17 +89,8 @@ SELECT
   jc.* EXCEPT(created_at, changelog_items),
 
   -- Определяем исходный и целевой статусы перехода
-  if(
-    max(length(changelog_items)) > 1,
-    JSON_VALUE(second_json_from_array, '$.fromString'),
-    JSON_VALUE(first_json_from_array, '$.fromString')
-  ) as from_status,
-
-  if(
-    isNotNull(resolution),
-    concat(JSON_VALUE(second_json_from_array, '$.toString'), ' (', resolution, ')'),
-    JSON_VALUE(first_json_from_array, '$.toString')
-  ) as to_status,
+  from_status,
+  to_status,
 
   -- Форматируем дату создания события
   formatDateTime(jc.created_at, '%d.%m.%y %H:%i') as created_at,
@@ -114,24 +126,45 @@ GROUP BY ALL
 --! SQL для issue
 WITH
 
-  -- Парсим changelog_items, чтобы получить информацию о переходе статусов
-  arrayElement(changelog_items, 1) as first_json_from_array,
-  arrayElement(changelog_items, 2) as second_json_from_array,
+  -- Парсим changelog_items, чтобы получить информацию о переходе статусов в виде JSON
+  arrayElement(
+    arrayFilter(
+      json -> JSON_VALUE(json, '$.field')='status',
+      changelog_items), 
+      1) as status_change_json,
+      
+  -- Парсим changelog_items, чтобы получить информацию о наличии решения в виде JSON    
+  arrayElement(
+    arrayFilter(
+      json -> JSON_VALUE(json, '$.field')='resolution',
+      changelog_items), 
+      1) as resolution_json,
+      
+  -- Если был совершен переход в статус "Закрыто", вытягиваем из JSON значение для поле "Решение", в противном случае null       
   if(
-    JSON_VALUE(first_json_from_array, '$.field') = 'resolution', 
-    JSON_VALUE(first_json_from_array, '$.toString'), 
-    null
-  ) as resolution,
+    JSON_VALUE(status_change_json, '$.toString')='Закрыто', 
+    JSON_VALUE(resolution_json, '$.toString'), 
+    null) as resolution,
+    
+  -- Вытягиваем из JSON значение предыдущего статуса      
+    JSON_VALUE(status_change_json, '$.fromString') as from_status,
+    
+  -- Вытягиваем из JSON значение актуального статуса и соединяем с полем "Решение", если статус = Закрыто       
+    if(
+      isNotNull(resolution),
+      concat(JSON_VALUE(status_change_json, '$.toString'), ' (', resolution, ')'),
+      JSON_VALUE(status_change_json, '$.toString')
+  ) as to_status,
   
   -- Собираем массив с наблюдателями для эпика (через ответ REST API)
   arrayMap(
     watcher -> JSONExtractString(watcher, 'emailAddress'),
-    JSONExtractArrayRaw(JSONExtractRaw(${a13.response}, 'watchers'))
+    JSONExtractArrayRaw(JSONExtractRaw(${a3.response}, 'watchers'))
   ) AS epic_watchers,
   
   -- Разрешённые email-адреса:
   --   активная глобальная подписка,
-  --   подписка на конкретное событие ("Изменение статуса задачи")
+  --   подписка на конкретное событие ("Изменение статуса")
   (
     SELECT lower(email)
     FROM teams_notification_subscriptions
@@ -183,17 +216,8 @@ SELECT
   jc.* EXCEPT(created_at, changelog_items),
 
   -- Определяем исходный и целевой статусы
-  if(
-    max(length(changelog_items)) > 1,
-    JSON_VALUE(second_json_from_array, '$.fromString'),
-    JSON_VALUE(first_json_from_array, '$.fromString')
-  ) as from_status,
-
-  if(
-    isNotNull(resolution),
-    concat(JSON_VALUE(second_json_from_array, '$.toString'), ' (', resolution, ')'),
-    JSON_VALUE(first_json_from_array, '$.toString')
-  ) as to_status,
+  from_status,
+  to_status,
 
   -- Форматирование даты события
   formatDateTime(jc.created_at, '%d.%m.%y %H:%i') as created_at,
@@ -230,18 +254,39 @@ GROUP BY ALL
 --! SQL для Epic
 WITH
 
-  -- Парсим changelog_items, чтобы получить информацию о переходе статусов
-  arrayElement(changelog_items, 1) as first_json_from_array,
-  arrayElement(changelog_items, 2) as second_json_from_array,
+  -- Парсим changelog_items, чтобы получить информацию о переходе статусов в виде JSON
+  arrayElement(
+    arrayFilter(
+      json -> JSON_VALUE(json, '$.field')='status',
+      changelog_items), 
+      1) as status_change_json,
+      
+  -- Парсим changelog_items, чтобы получить информацию о наличии решения в виде JSON    
+  arrayElement(
+    arrayFilter(
+      json -> JSON_VALUE(json, '$.field')='resolution',
+      changelog_items), 
+      1) as resolution_json,
+      
+  -- Если был совершен переход в статус "Закрыто", вытягиваем из JSON значение для поле "Решение", в противном случае null       
   if(
-    JSON_VALUE(first_json_from_array, '$.field') = 'resolution',
-    JSON_VALUE(first_json_from_array, '$.toString'),
-    null
-  ) as resolution,
+    JSON_VALUE(status_change_json, '$.toString')='Закрыто', 
+    JSON_VALUE(resolution_json, '$.toString'), 
+    null) as resolution,
+    
+  -- Вытягиваем из JSON значение предыдущего статуса      
+    JSON_VALUE(status_change_json, '$.fromString') as from_status,
+    
+  -- Вытягиваем из JSON значение актуального статуса и соединяем с полем "Решение", если статус = Закрыто       
+    if(
+      isNotNull(resolution),
+      concat(JSON_VALUE(status_change_json, '$.toString'), ' (', resolution, ')'),
+      JSON_VALUE(status_change_json, '$.toString')
+  ) as to_status,
   
   -- Разрешённые email-адреса:
   --   активная глобальная подписка,
-  --   подписка на конкретное событие ("Изменение статуса задачи")
+  --   подписка на конкретное событие ("Изменение статуса")
   (
     SELECT
       lower(email)
@@ -292,17 +337,8 @@ SELECT
   jc.* EXCEPT(created_at, changelog_items),
 
   -- Определяем исходный и целевой статусы перехода
-  if(
-    max(length(changelog_items)) > 1,
-    JSON_VALUE(second_json_from_array, '$.fromString'),
-    JSON_VALUE(first_json_from_array, '$.fromString')
-  ) as from_status,
-
-  if(
-    isNotNull(resolution),
-    concat(JSON_VALUE(second_json_from_array, '$.toString'), ' (', resolution, ')'),
-    JSON_VALUE(first_json_from_array, '$.toString')
-  ) as to_status,
+  from_status,
+  to_status,
 
   -- Форматируем дату создания события
   formatDateTime(jc.created_at, '%d.%m.%y %H:%i') as created_at,
