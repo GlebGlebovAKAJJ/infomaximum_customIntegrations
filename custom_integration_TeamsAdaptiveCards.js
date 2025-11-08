@@ -334,8 +334,8 @@ const sendCard = (service, webhookUrl, card, sendUid) => {
   return response;
 };
 
-// Формирует выходной объект с результатом отправки, статусом, временем, длительностью, получателями, endpoint и уникальным ID.
-const buildOutput = (response, sendTime, duration, targetEmails, webhookUrl, sendUid) => {
+// Формирует выходной объект с результатом отправки, статусом, временем, длительностью, получателями, endpoint, уникальным ID отправки и UUID адаптивной карточки.
+const buildOutput = (response, sendTime, duration, targetEmails, webhookUrl, sendUid, cardUuid) => {
   return {
     output: [[
       response?.status >= 200 && response?.status < 300
@@ -346,7 +346,8 @@ const buildOutput = (response, sendTime, duration, targetEmails, webhookUrl, sen
       duration ?? null,
       Array.isArray(targetEmails) ? targetEmails.join(", ") : null,
       webhookUrl ? webhookUrl.slice(0, 50) + "..." : null,
-      sendUid ?? null
+      sendUid ?? null,
+      cardUuid ?? null
     ]],
     output_variables: [
       { name: "message", type: "String" },
@@ -355,7 +356,8 @@ const buildOutput = (response, sendTime, duration, targetEmails, webhookUrl, sen
       { name: "duration_ms", type: "Double" },
       { name: "recipients", type: "String" },
       { name: "flow_endpoint", type: "String" },
-      { name: "send_uid", type: "String" }
+      { name: "send_uid", type: "String" },
+      { name: "card_uuid", type: "String" }
     ],
     state: undefined,
     hasNext: false
@@ -370,10 +372,12 @@ const executeSystemBlock = (service, style, badgeText, mainText, greetingText, b
   const sendUid = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
   const sendTime = new Date().toISOString();
   const start = Date.now();
+  const cardUuid = input.card_uuid;
 
   const card = {
     type: "AdaptiveCard",
     version: "1.5",
+    id: cardUuid,
     body: [
       {
         type: "TextBlock",
@@ -447,7 +451,7 @@ const executeSystemBlock = (service, style, badgeText, mainText, greetingText, b
 
   const response = sendCard(service, webhookUrl, card, sendUid);
   const duration = Date.now() - start;
-  return buildOutput(response, sendTime, duration, targetEmails, webhookUrl, sendUid);
+  return buildOutput(response, sendTime, duration, targetEmails, webhookUrl, sendUid, cardUuid);
 };
 
 // Выполняет блок Jira-уведомления, собирая данные, строя карточку и отправляя её, возвращая результат с замерами производительности.
@@ -459,9 +463,11 @@ const executeJiraBlock = (service, blockType, bundle) => {
   const { badgeText, openButtonTitle } = getBadgeAndButton(issueData.issueType, blockType, input);
   const roleFacts = buildRoleFacts(input, issueData.isEpic, issueData.isPRK, blockType);
   const cardBody = buildCardBody(blockType, input, badgeText, contextBlock, roleFacts, issueData.issueUrl, common.targetEmails);
+  const cardUuid = input.card_uuid;
   const card = {
     type: "AdaptiveCard",
     version: "1.5",
+    id: cardUuid,
     body: cardBody,
     actions: [
       {
@@ -476,13 +482,13 @@ const executeJiraBlock = (service, blockType, bundle) => {
   };
   const response = sendCard(service, common.webhookUrl, card, common.sendUid);
   const duration = Date.now() - common.start;
-  return buildOutput(response, common.sendTime, duration, common.targetEmails, common.webhookUrl, common.sendUid);
+  return buildOutput(response, common.sendTime, duration, common.targetEmails, common.webhookUrl, common.sendUid, cardUuid);
 };
 
 app = {
   schema: 2,
-  version: '1.4.0',
-  label: 'Jira → Teams Уведомления EXP',
+  version: '1.4.1',
+  label: 'Jira → Teams Уведомления',
   description: 'Интеллектуальные уведомления о событиях Jira в Microsoft Teams. Автоматически адаптируется под тип задачи (эпик, задача, подзадача) и роль получателя',
   blocks: {
     NewComment: {
@@ -504,7 +510,8 @@ app = {
         { key: "issue_responsible_sales", label: "Ответственный за продажи", type: "text", hint: "issue_responsible_sales" },
         { key: "issue_responsible_analytic", label: "Ответственный аналитик", type: "text", hint: "issue_responsible_analytic" },
         { key: "issue_responsible_tsupporter", label: "Ответственный специалист ТП", type: "text", hint: "issue_responsible_tsupporter" },
-        { key: "target_emails", label: "Получатели уведомления", type: "text", hint: "target_emails", required: true }
+        { key: "target_emails", label: "Получатели уведомления", type: "text", hint: "target_emails", required: true },
+        { key: "card_uuid", label: "UUID адаптивной карточки", type: "text", hint: "card_uuid", required: true }
       ],
 
       executePagination: (service, bundle) => executeJiraBlock(service, 'comment', bundle)
@@ -529,7 +536,8 @@ app = {
         { key: "issue_responsible_analytic", label: "Ответственный аналитик", type: "text", hint: "issue_responsible_analytic" },
         { key: "issue_responsible_tsupporter", label: "Ответственный специалист ТП", type: "text", hint: "issue_responsible_tsupporter" },
         { key: "created_at", label: "Дата изменения", type: "text", hint: "created_at" },
-        { key: "target_emails", label: "Получатели уведомления", type: "text", hint: "target_emails", required: true }
+        { key: "target_emails", label: "Получатели уведомления", type: "text", hint: "target_emails", required: true },
+        { key: "card_uuid", label: "UUID адаптивной карточки", type: "text", hint: "card_uuid", required: true }
       ],
 
       executePagination: (service, bundle) => executeJiraBlock(service, 'status', bundle)
@@ -553,7 +561,8 @@ app = {
         { key: "issue_responsible_sales", label: "Ответственный за продажи", type: "text", hint: "issue_responsible_sales" },
         { key: "issue_responsible_analytic", label: "Ответственный аналитик", type: "text", hint: "issue_responsible_analytic" },
         { key: "issue_responsible_tsupporter", label: "Ответственный специалист ТП", type: "text", hint: "issue_responsible_tsupporter" },
-        { key: "target_emails", label: "Получатели уведомления", type: "text", hint: "target_emails (E-mail адреса через запятую)", required: true }
+        { key: "target_emails", label: "Получатели уведомления", type: "text", hint: "target_emails (E-mail адреса через запятую)", required: true },
+        { key: "card_uuid", label: "UUID адаптивной карточки", type: "text", hint: "card_uuid", required: true }
       ],
       executePagination: (service, bundle) => executeJiraBlock(service, 'assignee', bundle)
     },
@@ -572,7 +581,8 @@ app = {
         { key: "created_by", label: "Создатель задачи", type: "text", hint: "created_by", required: true },
         { key: "assignee", label: "Исполнитель задачи", type: "text", hint: "assignee" },
         { key: "created_at", label: "Дата создания", type: "text", hint: "created_at" },
-        { key: "target_emails", label: "Получатели уведомления", type: "text", hint: "target_emails", required: true }
+        { key: "target_emails", label: "Получатели уведомления", type: "text", hint: "target_emails", required: true },
+        { key: "card_uuid", label: "UUID адаптивной карточки", type: "text", hint: "card_uuid", required: true }
       ],
 
       executePagination: (service, bundle) => executeJiraBlock(service, 'nested', bundle)
@@ -585,7 +595,8 @@ app = {
         { key: "card_name_ru", label: "Наименование типа уведомления", hint: 'card_name_ru', type: "text", required: true },
         { key: "created_at", label: "Дата добавления", hint: "created_at", type: "text", required: true },
         { key: "dashboard_url", label: "Ссылка на дашборд", hint: "dashboard_url", type: "text", required: true },
-        { key: "target_emails", label: "Список получателей (через запятую)", hint: "target_emails", type: "text", required: true }
+        { key: "target_emails", label: "Список получателей (через запятую)", hint: "target_emails", type: "text", required: true },
+        { key: "card_uuid", label: "UUID адаптивной карточки", type: "text", hint: "card_uuid", required: true }
       ],
 
       executePagination: (service, bundle) => executeSystemBlock(
@@ -611,7 +622,8 @@ app = {
         { key: "card_name_ru", label: "Наименование типа уведомления", hint: 'card_name_ru', type: "text", required: true },
         { key: "deleted_at", label: "Дата удаления", hint: "deleted_at", type: "text", required: true },
         { key: "dashboard_url", label: "Ссылка на дашборд", hint: "dashboard_url", type: "text", required: true },
-        { key: "target_emails", label: "Список получателей (через запятую)", hint: "target_emails", type: "text", required: true }
+        { key: "target_emails", label: "Список получателей (через запятую)", hint: "target_emails", type: "text", required: true },
+        { key: "card_uuid", label: "UUID адаптивной карточки", type: "text", hint: "card_uuid", required: true }
       ],
 
       executePagination: (service, bundle) => executeSystemBlock(
