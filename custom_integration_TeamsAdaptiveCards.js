@@ -61,20 +61,20 @@ const getBadgeAndButton = (issueType, blockType, input) => {
   switch (issueType) {
     case "epic":
       if (blockType === 'comment') badgeText = "Новый комментарий в Epic";
-      else if (blockType === 'status') badgeText = `Изменение статуса в Epic: ${safe(input.from_status)} → ${safe(input.to_status)}`;
+      else if (blockType === 'status') badgeText = "Изменение статуса в Epic";
       else if (blockType === 'assignee') badgeText = "Новый Epic, где ты — Исполнитель";
       openButtonTitle = "Открыть Epic";
       break;
     case "subtask":
       if (blockType === 'comment') badgeText = "Новый комментарий в подзадаче";
-      else if (blockType === 'status') badgeText = `Изменение статуса в подзадаче: ${safe(input.from_status)} → ${safe(input.to_status)}`;
+      else if (blockType === 'status') badgeText = "Изменение статуса в подзадаче";
       else if (blockType === 'assignee') badgeText = "Новая подзадача, где ты — Исполнитель";
       else if (blockType === 'nested') badgeText = "Новая подзадача";
       openButtonTitle = "Открыть подзадачу";
       break;
     default:
       if (blockType === 'comment') badgeText = "Новый комментарий в задаче";
-      else if (blockType === 'status') badgeText = `Изменение статуса в задаче: ${safe(input.from_status)} → ${safe(input.to_status)}`;
+      else if (blockType === 'status') badgeText = "Изменение статуса в задаче";
       else if (blockType === 'assignee') badgeText = "Новая задача, где ты — Исполнитель";
       else if (blockType === 'nested') badgeText = "Новая задача";
       openButtonTitle = "Открыть задачу";
@@ -234,9 +234,26 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
     specificParts = [
       {
         type: "TextBlock",
-        text: `**Инициатор:** ${safe(input.created_by)}`,
+        text: `**${safe(input.created_by)}** сменил статус:`,
         wrap: true,
         spacing: "Small"
+      },
+      {
+        type: "Container",
+        items: [
+          {
+            type: "RichTextBlock",
+            inlines: [
+              {
+                type: "TextRun",
+                text: `${safe(input.from_status)} → ${safe(input.to_status)}`,
+                wrap: true
+              }
+            ]
+          }
+        ],
+        style: "emphasis",
+        spacing: "None"
       }
     ];
   } else if (blockType === 'assignee') {
@@ -492,7 +509,7 @@ app = {
   description: 'Интеллектуальные уведомления о событиях Jira в Microsoft Teams. Автоматически адаптируется под тип задачи (эпик, задача, подзадача) и роль получателя',
   blocks: {
     NewComment: {
-      label: "Новый комментарий creator_name",
+      label: "Новый комментарий",
       description: "Отправляет адаптивную карточку в Teams, автоматически определяя тип сущности Jira",
       inputFields: [
         { key: "issue_key", label: "Ключ задачи", type: "text", hint: "issue_key", required: true },
@@ -517,7 +534,7 @@ app = {
       executePagination: (service, bundle) => executeJiraBlock(service, 'comment', bundle)
     },
     StatusChange: {
-      label: "Изменение статуса в задаче creator_name",
+      label: "Изменение статуса в задаче",
       description: "Отправляет адаптивную карточку в Teams, автоматически определяя тип сущности Jira",
       inputFields: [
         { key: "issue_key", label: "Ключ задачи", type: "text", hint: "issue_key", required: true },
@@ -543,7 +560,7 @@ app = {
       executePagination: (service, bundle) => executeJiraBlock(service, 'status', bundle)
     },
     NewIssueAssignee: {
-      label: "Новая задача, где ты — Исполнитель creator_name",
+      label: "Новая задача, где ты — Исполнитель",
       description: "Отправляет адаптивную карточку в Teams с событием \"Новая задача JIRA, где ты — Исполнитель\", автоматически определяя тип сущности Jira",
       inputFields: [
         { key: "issue_key", label: "Ключ задачи", type: "text", hint: "issue_key", required: true },
@@ -567,7 +584,7 @@ app = {
       executePagination: (service, bundle) => executeJiraBlock(service, 'assignee', bundle)
     },
     NewNestedIssue: {
-      label: "Новая вложенная задача/подзадача creator_name",
+      label: "Новая вложенная задача/подзадача",
       description: "Отправляет адаптивную карточку в Teams для новых задач и подзадач (исключая эпики, которые обрабатываются отдельным блоком)",
       inputFields: [
         { key: "issue_key", label: "Ключ задачи", type: "text", hint: "issue_key", required: true },
