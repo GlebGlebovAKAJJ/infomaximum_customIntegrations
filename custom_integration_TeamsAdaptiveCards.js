@@ -27,7 +27,7 @@ const getCommonData = (bundle, input) => {
 
 // Формирует URL задачи, контекстный URL (если есть), тип задачи, ключ проекта, флаги для эпика и проекта PRK на основе входных данных.
 const getIssueData = (input, jiraBaseUrl) => {
-  const issueUrl = `${jiraBaseUrl}/browse/${safe(input.issue_key)}`;
+  const issueUrl = input.issue_toUrl ? safe(input.issue_toUrl) : `${jiraBaseUrl}/browse/${safe(input.issue_key)}`;
   const contextUrl = input.context_issue_key ? `${jiraBaseUrl}/browse/${safe(input.context_issue_key)}` : null;
   const issueType = input.issue_type?.toLowerCase() || "";
   const projectKey = (input.issue_key?.split("-")[0] || "").toUpperCase();
@@ -79,13 +79,23 @@ const getBadgeAndButton = (issueType, blockType, input) => {
       else if (blockType === 'nested') badgeText = "Новая задача";
       openButtonTitle = "Открыть задачу";
   }
+  if (blockType === 'specific_comment') {
+    badgeText = "Комментарий от А.Бочкин";
+    openButtonTitle = "Открыть задачу";
+  }
   return { badgeText, openButtonTitle };
 };
 
 // Собирает массив фактов (ключ-значение) для карточки, включая роли (автор, исполнитель, менеджеры) и даты, в зависимости от типа блока и флагов эпика/PRK.
 const buildRoleFacts = (input, isEpic, isPRK, blockType) => {
   const facts = [];
-  if (blockType === 'comment') {
+  if (blockType === 'specific_comment') {
+    facts.push({ title: "Проект:", value: safe(input.issue_project_name) });
+    facts.push({ title: "Тип задачи:", value: safe(input.issue_type_name) });
+    facts.push({ title: "Исполнитель:", value: safe(input.assignee) });
+    facts.push({ title: "Автор задачи:", value: safe(input.reporter) });
+    facts.push({ title: "Дата создания:", value: safe(input.comment_created) });
+  } else if (blockType === 'comment') {
     if (isEpic && isPRK) {
       const val1 = safe(input.issue_responsible_implementer);
       if (val1 && val1 !== "-") facts.push({ title: "Менеджер внедрений:", value: val1 });
@@ -188,7 +198,7 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
         type: "Badge",
         text: badgeText,
         size: "Large",
-        style: blockType === 'comment' ? "Accent" : blockType === 'status' ? "Accent" : blockType === 'assignee' ? "Attention" : "Good",
+        style: blockType === 'comment' ? "Accent" : blockType === 'status' ? "Accent" : blockType === 'assignee' ? "Attention" : blockType === 'specific_comment' ? "Warning" : "Good",
         icon: blockType === 'comment' ? "CommentAdd" : blockType === 'status' ? "ArrowSync" : "PersonSquare"
       },
       {
@@ -200,7 +210,7 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
         spacing: "Small"
       }
     ],
-    style: "accent",
+    style: blockType === 'specific_comment' ? "warning" : "accent",
     showBorder: true,
     roundedCorners: true,
     spacing: "Medium"
@@ -208,7 +218,29 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
 
   let specificParts = [];
 
-  if (blockType === 'comment') {
+  if (blockType === 'specific_comment') {
+    specificParts = [
+      {
+        type: "TextBlock",
+        text: `**${safe(input.comment_author)}** пишет:`,
+        wrap: true,
+        spacing: "Small"
+      },
+      {
+        type: "Container",
+        items: [
+          {
+            type: "RichTextBlock",
+            inlines: [
+              { type: "TextRun", text: `${safe(input.comment_body)}`, wrap: true }
+            ]
+          }
+        ],
+        style: "emphasis",
+        spacing: "None"
+      }
+    ];
+  } else if (blockType === 'comment') {
     specificParts = [
       {
         type: "TextBlock",
@@ -502,6 +534,112 @@ const executeJiraBlock = (service, blockType, bundle) => {
   return buildOutput(response, common.sendTime, duration, common.targetEmails, common.webhookUrl, common.sendUid, cardUuid);
 };
 
+// Выполняет блок уведомления об уволенном сотруднике с незакрытыми задачами, строя и отправляя карточку с деталями задач, возвращая результат.
+const executeFiredEmployeeBlock = (service, bundle) => {
+  const input = bundle.inputData;
+  const webhookUrl = bundle.authData.incoming_webhook_url;
+  if (!webhookUrl) {
+    throw new Error("URL вебхука не указан. Заполните поле и повторите попытку.");
+  }
+  const jiraBaseUrl = (bundle.authData.jira_base_url || "").replace(/\/$/, "");
+  if (!jiraBaseUrl) {
+    throw new Error('В настойках подключения не указан jiraBaseUrl. Заполните поле и повторите попытку.');
+  }
+  const targetEmails = (input.target_emails || "").split(",").map(e => e.trim()).filter(Boolean);
+  const projectsData = (input.projects_breakdown || "").split(",").map(s => {
+    const [name, count] = s.trim().split(":");
+    return { name: name?.trim(), count: parseInt(count?.trim()) || 0 };
+  }).filter(p => p.name && p.count > 0);
+
+  // Генерация donut chart data
+  const chartData = projectsData.map(p => ({
+    legend: p.name,
+    value: p.count
+  }));
+  const sendUid = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+  const sendTime = new Date().toISOString();
+  const start = Date.now();
+  const cardUuid = input.card_uuid;
+
+  const card = {
+    type: "AdaptiveCard",
+    version: "1.5",
+    id: cardUuid,
+    body: [
+      {
+        type: "TextBlock",
+        text: "powered by IM LLC / Proceset",
+        size: "Small",
+        horizontalAlignment: "Right",
+        isSubtle: true,
+        spacing: "None"
+      },
+      {
+        type: "Container",
+        style: "attention",
+        showBorder: true,
+        roundedCorners: true,
+        spacing: "Medium",
+        items: [
+          {
+            type: "Badge",
+            text: "Незакрытые задачи у неактивных пользователей",
+            size: "Large",
+            style: "Attention",
+            icon: "Warning"
+          },
+          {
+            type: "TextBlock",
+            text: "Обнаружены незакрытые задачи, закрепленные за неактивными пользователями.",
+            wrap: true,
+            weight: "Bolder",
+            size: "Medium",
+            spacing: "Small"
+          }
+        ]
+      },
+      {
+        type: "FactSet",
+        facts: [
+          {
+            title: "Всего незакрытых задач:",
+            value: safe(input.total_open_issues)
+          }
+        ],
+        spacing: "Medium"
+      },
+      ...(projectsData.length > 0 ? [
+        {
+          type: "TextBlock",
+          text: "Распределение по проектам:",
+          weight: "Bolder",
+          spacing: "Small"
+        },
+        {
+          type: "Chart.Donut",
+          title: "Распределение по проектам",
+          colorset: "diverging",
+          data: chartData
+        }
+      ] : [])
+    ],
+    actions: [
+      {
+        type: "Action.OpenUrl",
+        title: "Открыть список в Jira",
+        url: `${jiraBaseUrl}/issues/?jql=${encodeURIComponent(safe(input.jql_filter_url))}`,
+        iconUrl: "icon:Link",
+        style: "positive"
+      }
+    ],
+    data: { targetEmails }
+  };
+
+  const response = sendCard(service, webhookUrl, card, sendUid);
+  const duration = Date.now() - start;
+  return buildOutput(response, sendTime, duration, targetEmails, webhookUrl, sendUid, cardUuid);
+};
+
 app = {
   schema: 2,
   version: '1.4.1',
@@ -657,6 +795,38 @@ app = {
         null,
         bundle
       )
+    },
+    FiredEmployeeOpenIssues: {
+      label: "Незакрытые задачи с неактивными пользователями",
+      description: "Отправляет адаптивную карточку в Teams при обнаружении незакрытых задач с наличием в них неактивных пользователей.",
+      inputFields: [
+        { key: "total_open_issues", label: "Всего незакрытых задач", type: "text", hint: "total_open_issues", required: true },
+        { key: "projects_breakdown", label: "Распределение по проектам", type: "text", hint: "projects_breakdown (данные в формате Project:Count, Project2:Count2 через запятую)", required: true },
+        { key: "issue_list", label: "Список незакрытых задач", type: "text", hint: "issue_list (данные через запятую)", required: true },
+        { key: "jql_filter_url", label: "Ссылка на JQL фильтр в Jira", type: "text", hint: "jql_filter_url", required: true },
+        { key: "target_emails", label: "Получатели уведомления", type: "text", hint: "target_emails (E-mail адреса через запятую)", required: true }
+      ],
+
+      executePagination: (service, bundle) => executeFiredEmployeeBlock(service, bundle)
+    },
+    CommentFromABochkin: {
+      label: "Комментарий от А.Бочкин",
+      description: "Отправляет адаптивную карточку в Teams при комментарии от А.Бочкин",
+      inputFields: [
+        { key: "issue_key", label: "Ключ задачи", type: "text", hint: "issue_key", required: true },
+        { key: "issue_summary", label: "Название задачи", type: "text", hint: "issue_summary", required: true },
+        { key: "issue_project_name", label: "Название проекта", type: "text", hint: "issue_project_name", required: true },
+        { key: "issue_type_name", label: "Название типа задачи", type: "text", hint: "issue_type_name", required: true },
+        { key: "comment_author", label: "Автор комментария", type: "text", hint: "comment_author", required: true },
+        { key: "comment_body", label: "Текст комментария", type: "text", hint: "comment_body", required: true },
+        { key: "comment_created", label: "Дата создания комментария", type: "text", hint: "comment_created", required: true },
+        { key: "assignee", label: "Исполнитель задачи", type: "text", hint: "assignee" },
+        { key: "reporter", label: "Автор задачи", type: "text", hint: "reporter" },
+        { key: "target_emails", label: "Получатели уведомления", type: "text", hint: "target_emails", required: true },
+        { key: "card_uuid", label: "UUID адаптивной карточки", type: "text", hint: "card_uuid", required: true }
+      ],
+
+      executePagination: (service, bundle) => executeJiraBlock(service, 'specific_comment', bundle)
     }
   },
   connections: {
