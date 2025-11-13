@@ -94,7 +94,6 @@ const buildRoleFacts = (input, isEpic, isPRK, blockType) => {
     facts.push({ title: "Тип задачи:", value: safe(input.issue_type_name) });
     facts.push({ title: "Исполнитель:", value: safe(input.assignee) });
     facts.push({ title: "Автор задачи:", value: safe(input.reporter) });
-    facts.push({ title: "Дата создания:", value: safe(input.comment_created) });
   } else if (blockType === 'comment') {
     if (isEpic && isPRK) {
       const val1 = safe(input.issue_responsible_implementer);
@@ -105,22 +104,16 @@ const buildRoleFacts = (input, isEpic, isPRK, blockType) => {
       if (val3 && val3 !== "-") facts.push({ title: "Аналитик:", value: val3 });
       const val4 = safe(input.issue_responsible_tsupporter);
       if (val4 && val4 !== "-") facts.push({ title: "Специалист ТП:", value: val4 });
-      const val5 = safe(input.comment_created);
-      if (val5 && val5 !== "-") facts.push({ title: "Дата комментария:", value: val5 });
     } else if (isEpic) {
       const val1 = safe(input.assignee);
       if (val1 && val1 !== "-") facts.push({ title: "Исполнитель:", value: val1 });
       const val2 = safe(input.reporter);
       if (val2 && val2 !== "-") facts.push({ title: "Автор:", value: val2 });
-      const val3 = safe(input.comment_created);
-      if (val3 && val3 !== "-") facts.push({ title: "Дата комментария:", value: val3 });
     } else {
       const val1 = safe(input.reporter);
       if (val1 && val1 !== "-") facts.push({ title: "Автор:", value: val1 });
       const val2 = safe(input.assignee);
       if (val2 && val2 !== "-") facts.push({ title: "Исполнитель:", value: val2 });
-      const val3 = safe(input.comment_created);
-      if (val3 && val3 !== "-") facts.push({ title: "Дата комментария:", value: val3 });
     }
   } else if (blockType === 'status') {
     if (isEpic && isPRK) {
@@ -132,22 +125,16 @@ const buildRoleFacts = (input, isEpic, isPRK, blockType) => {
       if (val3 && val3 !== "-") facts.push({ title: "Аналитик:", value: val3 });
       const val4 = safe(input.issue_responsible_tsupporter);
       if (val4 && val4 !== "-") facts.push({ title: "Специалист ТП:", value: val4 });
-      const val5 = safe(input.created_at);
-      if (val5 && val5 !== "-") facts.push({ title: "Дата изменения:", value: val5 });
     } else if (isEpic) {
       const val1 = safe(input.assignee);
       if (val1 && val1 !== "-") facts.push({ title: "Исполнитель:", value: val1 });
       const val2 = safe(input.reporter);
       if (val2 && val2 !== "-") facts.push({ title: "Автор:", value: val2 });
-      const val3 = safe(input.created_at);
-      if (val3 && val3 !== "-") facts.push({ title: "Дата изменения:", value: val3 });
     } else {
       const val1 = safe(input.reporter);
       if (val1 && val1 !== "-") facts.push({ title: "Автор:", value: val1 });
       const val2 = safe(input.assignee);
       if (val2 && val2 !== "-") facts.push({ title: "Исполнитель:", value: val2 });
-      const val3 = safe(input.created_at);
-      if (val3 && val3 !== "-") facts.push({ title: "Дата изменения:", value: val3 });
     }
   } else if (blockType === 'assignee') {
     if (isEpic && isPRK) {
@@ -159,8 +146,6 @@ const buildRoleFacts = (input, isEpic, isPRK, blockType) => {
       if (val3 && val3 !== "-") facts.push({ title: "Аналитик:", value: val3 });
       const val4 = safe(input.issue_responsible_tsupporter);
       if (val4 && val4 !== "-") facts.push({ title: "Специалист ТП:", value: val4 });
-      const val5 = safe(input.created_at);
-      if (val5 && val5 !== "-") facts.push({ title: "Дата регистрации:", value: val5 });
     } else {
       const val1 = safe(input.reporter);
       if (val1 && val1 !== "-") facts.push({ title: "Автор:", value: val1 });
@@ -174,8 +159,6 @@ const buildRoleFacts = (input, isEpic, isPRK, blockType) => {
     if (val1 && val1 !== "-") facts.push({ title: "Автор:", value: val1 });
     const val2 = safe(input.assignee);
     if (val2 && val2 !== "-") facts.push({ title: "Исполнитель:", value: val2 });
-    const val3 = safe(input.created_at);
-    if (val3 && val3 !== "-") facts.push({ title: "Дата регистрации:", value: val3 });
   }
   return facts;
 };
@@ -266,7 +249,7 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
     specificParts = [
       {
         type: "TextBlock",
-        text: `**${safe(input.created_by)}** сменил статус:`,
+        text: `**${safe(input.created_by)}** сменил(а) статус:`,
         wrap: true,
         spacing: "Small"
       },
@@ -414,7 +397,7 @@ const buildOutput = (response, sendTime, duration, targetEmails, webhookUrl, sen
 };
 
 // Выполняет системный блок уведомления, строя и отправляя карточку с заданным стилем, текстами и фактами, возвращая результат.
-const executeSystemBlock = (service, style, badgeText, mainText, greetingText, bodyText, facts, actionTitle, bundle) => {
+const executeSystemBlock = (service, style, badgeText, mainText, greetingText, bodyText, facts, actionTitle, bundle, additionalText, listBlock) => {
   const input = bundle.inputData;
   const webhookUrl = bundle.authData.incoming_webhook_url;
   const targetEmails = (input.target_emails || "").split(",").map(e => e.trim()).filter(Boolean);
@@ -473,13 +456,30 @@ const executeSystemBlock = (service, style, badgeText, mainText, greetingText, b
         type: "TextBlock",
         text: bodyText,
         wrap: true,
-        spacing: "Large",
         isSubtle: true
       },
+      ...(listBlock ? [
+        {
+          type: "Container",
+          items: listBlock.items.map(item => ({
+            type: "TextBlock",
+            text: `• ${item}`,
+            wrap: true,
+            spacing: "None"
+          }))
+        }
+      ] : []),
       {
         type: "FactSet",
         facts: facts
       },
+      ...(additionalText ? [{
+        type: "TextBlock",
+        text: additionalText,
+        wrap: true,
+        spacing: "Large",
+        isSubtle: true
+      }] : []),
       ...(actionTitle ? [{
         type: "ActionSet",
         actions: [
@@ -642,7 +642,7 @@ const executeFiredEmployeeBlock = (service, bundle) => {
 
 app = {
   schema: 2,
-  version: '1.4.1',
+  version: '1.5.0',
   label: 'Jira → Teams Уведомления',
   description: 'Интеллектуальные уведомления о событиях Jira в Microsoft Teams. Автоматически адаптируется под тип задачи (эпик, задача, подзадача) и роль получателя',
   blocks: {
@@ -656,7 +656,6 @@ app = {
         { key: "issue_type_name", label: "Название типа задачи", type: "text", hint: "issue_type_name", required: true },
         { key: "comment_author", label: "Автор комментария", type: "text", hint: "comment_author", required: true },
         { key: "comment_body", label: "Текст комментария", type: "text", hint: "comment_body", required: true },
-        { key: "comment_created", label: "Дата комментария", type: "text", hint: "comment_created" },
         { key: "context_issue_key", label: "Ключ контекстной задачи", type: "text", hint: "context_issue_key (если задача - то ссылка на эпик, если подзадача, то ссылка на родителя)" },
         { key: "context_issue_summary", label: "Название контекстной задачи", type: "text", hint: "context_issue_summary (если задача - то ссылка на эпик, если подзадача, то ссылка на родителя)" },
         { key: "reporter", label: "Автор задачи", type: "text", hint: "reporter" },
@@ -672,7 +671,7 @@ app = {
       executePagination: (service, bundle) => executeJiraBlock(service, 'comment', bundle)
     },
     StatusChange: {
-      label: "Изменение статуса в задаче",
+      label: "Изменение статуса",
       description: "Отправляет адаптивную карточку в Teams, автоматически определяя тип сущности Jira",
       inputFields: [
         { key: "issue_key", label: "Ключ задачи", type: "text", hint: "issue_key", required: true },
@@ -690,7 +689,6 @@ app = {
         { key: "issue_responsible_sales", label: "Ответственный за продажи", type: "text", hint: "issue_responsible_sales" },
         { key: "issue_responsible_analytic", label: "Ответственный аналитик", type: "text", hint: "issue_responsible_analytic" },
         { key: "issue_responsible_tsupporter", label: "Ответственный специалист ТП", type: "text", hint: "issue_responsible_tsupporter" },
-        { key: "created_at", label: "Дата изменения", type: "text", hint: "created_at" },
         { key: "target_emails", label: "Получатели уведомления", type: "text", hint: "target_emails", required: true },
         { key: "card_uuid", label: "UUID адаптивной карточки", type: "text", hint: "card_uuid", required: true }
       ],
@@ -698,7 +696,7 @@ app = {
       executePagination: (service, bundle) => executeJiraBlock(service, 'status', bundle)
     },
     NewIssueAssignee: {
-      label: "Новая задача, где ты — Исполнитель",
+      label: "Новая задача где ты — Исполнитель",
       description: "Отправляет адаптивную карточку в Teams с событием \"Новая задача JIRA, где ты — Исполнитель\", автоматически определяя тип сущности Jira",
       inputFields: [
         { key: "issue_key", label: "Ключ задачи", type: "text", hint: "issue_key", required: true },
@@ -710,7 +708,6 @@ app = {
         { key: "context_issue_summary", label: "Название контекстной задачи", type: "text", hint: "context_issue_summary (если задача - то ссылка на эпик, если подзадача, то ссылка на родителя)" },
         { key: "reporter", label: "Автор задачи", type: "text", hint: "reporter" },
         { key: "created_by", label: "Создатель задачи", type: "text", hint: "created_by", required: true },
-        { key: "created_at", label: "Дата создания", type: "text", hint: "created_at" },
         { key: "due_date", label: "Дата исполнения", type: "text", hint: "due_date" },
         { key: "issue_responsible_implementer", label: "Ответственный за внедрение", type: "text", hint: "issue_responsible_implementer" },
         { key: "issue_responsible_sales", label: "Ответственный за продажи", type: "text", hint: "issue_responsible_sales" },
@@ -735,7 +732,6 @@ app = {
         { key: "reporter", label: "Автор задачи", type: "text", hint: "reporter" },
         { key: "created_by", label: "Создатель задачи", type: "text", hint: "created_by", required: true },
         { key: "assignee", label: "Исполнитель задачи", type: "text", hint: "assignee" },
-        { key: "created_at", label: "Дата создания", type: "text", hint: "created_at" },
         { key: "target_emails", label: "Получатели уведомления", type: "text", hint: "target_emails", required: true },
         { key: "card_uuid", label: "UUID адаптивной карточки", type: "text", hint: "card_uuid", required: true }
       ],
@@ -743,7 +739,7 @@ app = {
       executePagination: (service, bundle) => executeJiraBlock(service, 'nested', bundle)
     },
     NewCardType: {
-      label: "Добавлен новый тип уведомления (Системное)",
+      label: "Добавление типа уведомления (Системное)",
       description: "Отправляет адаптивную карточку в Teams при добавлении нового типа уведомления в системе Jira → Teams.",
       inputFields: [
         { key: "employee_name", label: "Имя сотрудника", hint: "employee_name", type: "text", required: true },
@@ -766,11 +762,13 @@ app = {
           { title: "Дата добавления:", value: safe(bundle.inputData.created_at) }
         ],
         "Перейти в отчет",
-        bundle
+        bundle,
+        null,
+        null
       )
     },
     RemoveCardType: {
-      label: "Удален тип уведомления (Системное)",
+      label: "Удаление типа уведомления (Системное)",
       description: "Отправляет адаптивную карточку в Teams при удалении типа уведомления в системе Jira → Teams.",
       inputFields: [
         { key: "employee_name", label: "Имя сотрудника", hint: "employee_name", type: "text", required: true },
@@ -793,7 +791,9 @@ app = {
           { title: "Дата удаления:", value: safe(bundle.inputData.deleted_at) }
         ],
         null,
-        bundle
+        bundle,
+        null,
+        null
       )
     },
     FiredEmployeeOpenIssues: {
@@ -810,7 +810,7 @@ app = {
       executePagination: (service, bundle) => executeFiredEmployeeBlock(service, bundle)
     },
     CommentFromABochkin: {
-      label: "Комментарий от А.Бочкин",
+      label: "Новый комментарий от А.Бочкина",
       description: "Отправляет адаптивную карточку в Teams при комментарии от А.Бочкин",
       inputFields: [
         { key: "issue_key", label: "Ключ задачи", type: "text", hint: "issue_key", required: true },
@@ -819,7 +819,6 @@ app = {
         { key: "issue_type_name", label: "Название типа задачи", type: "text", hint: "issue_type_name", required: true },
         { key: "comment_author", label: "Автор комментария", type: "text", hint: "comment_author", required: true },
         { key: "comment_body", label: "Текст комментария", type: "text", hint: "comment_body", required: true },
-        { key: "comment_created", label: "Дата создания комментария", type: "text", hint: "comment_created", required: true },
         { key: "assignee", label: "Исполнитель задачи", type: "text", hint: "assignee" },
         { key: "reporter", label: "Автор задачи", type: "text", hint: "reporter" },
         { key: "target_emails", label: "Получатели уведомления", type: "text", hint: "target_emails", required: true },
@@ -827,6 +826,40 @@ app = {
       ],
 
       executePagination: (service, bundle) => executeJiraBlock(service, 'specific_comment', bundle)
+    },
+    AdminGlobalSubscriptionActivation: {
+      label: "Админ. подключение глобальной подписки и типов уведомлений (Системное)",
+      description: "Отправляет адаптивную карточку в Teams при подключении пользователя к глобальной подписке на уведомления.",
+      inputFields: [
+        { key: "employee_name", label: "Имя сотрудника", type: "text", hint: "employee_name", required: true },
+        { key: "card_names", label: "Типы уведомлений", type: "text", hint: "card_names (массив названий через точку с запятой)", required: true },
+        { key: "dashboard_url", label: "Ссылка на дашборд", type: "text", hint: "dashboard_url", required: true },
+        { key: "email", label: "E-mail пользователя", type: "text", hint: "email", required: true },
+        { key: "started_at", label: "Дата подключения", type: "text", hint: "started_at", required: true },
+        { key: "card_uuid", label: "UUID адаптивной карточки", type: "text", hint: "card_uuid", required: true }
+      ],
+
+      executePagination: (service, bundle) => {
+        const input = bundle.inputData;
+        const cardNamesString = (input.card_names || "").replace(/^\[|\]$/g, "");
+        const cardNamesArray = cardNamesString.split(";").map(name => name.trim()).filter(Boolean);
+        bundle.inputData.target_emails = input.email; // Установить targetEmails как email пользователя
+        return executeSystemBlock(
+          service,
+          "accent",
+          "Системное уведомление",
+          "**Тебя подключили к системе уведомлений Jira → Teams**",
+          `Приветствуем, **${safe(input.employee_name)}**!`,
+          "Мы подключили тебя к глобальной подписке на уведомления и активировали следующие типы уведомлений:",
+          [
+            { title: "Дата подключения:", value: safe(input.started_at) }
+          ],
+          "Перейти в отчёт",
+          bundle,
+          "Подробнее о каждом типе уведомлений вы можете узнать в отчёте в разделе **«Какие типы уведомлений бывают?»**.",
+          { title: "", items: cardNamesArray }
+        );
+      }
     }
   },
   connections: {

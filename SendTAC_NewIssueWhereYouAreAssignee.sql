@@ -3,39 +3,45 @@ WITH
   
   -- Разрешённые email-адреса:
   --   активная глобальная подписка,
-  --   подписка на конкретное событие ("Назначен исполнителем")
+  --   подписка на конкретное событие ("Новая задача, где ты - Исполнитель")
   (
-    SELECT
-      lower(email)
+    SELECT arrayDistinct(groupArray(lower(email)))
     FROM teams_notification_subscriptions
-    WHERE
-      is_active = 1
+    WHERE is_active = 1
       AND event_type_id = toUUID('3112016b-4517-46ac-8573-ddfe670da4b4')
-    INTERSECT
-    SELECT
-      lower(email_address)
-    FROM teams_notification_recipients
-    WHERE
-      is_active = 1
+      AND lower(email) IN (
+        SELECT lower(email_address)
+        FROM teams_notification_recipients
+        WHERE is_active = 1
+      )
   ) AS valid_recipients
   
 -- Формируем итоговый набор данных для отправки уведомления
 SELECT
-  jc.*,
+  jc.* EXCEPT (
+  issue_due_date, 
+  changelog_items, 
+  comment_body, 
+  created_at, 
+  issue_responsible_analytic, 
+  issue_responsible_implementer, 
+  issue_responsible_tsupporter, 
+  issue_responsible_sales, 
+  issue_description),
 
   -- Описание: если пустое — подставляем заглушку
-  if(jc.issue_description = '', 'Описание отсутствует', jc.issue_description) as issue_description,
+  if(jc.issue_description = '', 'описание отсутствует', jc.issue_description) as issue_description,
 
   -- Дата события
   formatDateTime(jc.created_at, '%d.%m.%y %H:%i') as created_at,
 
   -- Срок исполнения с остатком дней
-  concat(
+  ifNull(concat(
     formatDateTime(jc.issue_due_date, '%d.%m.%y'),
     ' (через ',
     date_diff('dd', today(), jc.issue_due_date),
     ' дн.)'
-  ) as issue_due_date,
+  ), 'отсутствует') as issue_due_date,
 
   -- Краткие имена участников (до двух слов)
   arrayStringConcat(arraySlice(splitByChar(' ', ifNull(creator.name, '')), 1, 2), ' ') AS creator_name,
@@ -52,7 +58,7 @@ SELECT
          AND lower(jc.issue_assignee) != lower(jc.issue_reporter) 
          AND lower(jc.issue_assignee) != '' 
          AND lower(jc.issue_assignee) IS NOT NULL 
-         AND lower(jc.issue_assignee) IN valid_recipients 
+         AND arrayExists(v -> v = lower(jc.issue_assignee), valid_recipients)
     THEN lower(jc.issue_assignee) 
     ELSE '' 
   END AS target_emails
@@ -73,44 +79,54 @@ WHERE
 -- Группировка по всем полям для устранения дубликатов
 GROUP BY ALL
 
---! SQL для issue
+--! SQL для issue with epic link
 WITH
   
   -- Разрешённые email-адреса:
   --   активная глобальная подписка,
-  --   подписка на конкретное событие ("Назначен исполнителем")
+  --   подписка на конкретное событие ("Новая задача, где ты - Исполнитель")
   (
-    SELECT
-      lower(email)
-    FROM teams_notification_subscriptions
-    WHERE
-      is_active = 1
-      AND event_type_id = toUUID('3112016b-4517-46ac-8573-ddfe670da4b4')
-    INTERSECT
-    SELECT
-      lower(email_address)
-    FROM teams_notification_recipients
-    WHERE
-      is_active = 1
+    SELECT 
+      arrayDistinct(groupArray(lower(email)))
+    FROM 
+      teams_notification_subscriptions
+    WHERE is_active = 1
+          AND event_type_id = toUUID('3112016b-4517-46ac-8573-ddfe670da4b4')
+          AND lower(email) IN (
+        SELECT 
+          lower(email_address)
+        FROM 
+          teams_notification_recipients
+        WHERE is_active = 1
+      )
   ) AS valid_recipients
   
 -- Формируем итоговый набор данных для отправки уведомления
 SELECT
-  jc.*,
+  jc.* EXCEPT (
+  issue_due_date, 
+  changelog_items, 
+  comment_body, 
+  created_at, 
+  issue_responsible_analytic, 
+  issue_responsible_implementer, 
+  issue_responsible_tsupporter, 
+  issue_responsible_sales, 
+  issue_description),
 
   -- Проверяем наличие описания, при его отсутствии подставляем текст-заглушку
-  if(jc.issue_description = '', 'Описание отсутствует', jc.issue_description) as issue_description,
+  if(jc.issue_description = '', 'описание отсутствует', jc.issue_description) as issue_description,
 
   -- Форматируем дату создания события
   formatDateTime(jc.created_at, '%d.%m.%y %H:%i') as created_at,
 
   -- Формируем срок выполнения с указанием количества оставшихся дней
-  concat(
+  ifNull(concat(
     formatDateTime(jc.issue_due_date, '%d.%m.%y'),
     ' (через ',
     date_diff('dd', today(), jc.issue_due_date),
     ' дн.)'
-  ) as issue_due_date,
+  ), 'отсутствует') as issue_due_date,
 
   -- Преобразуем ФИО участников в краткую форму (до двух слов)
   arrayStringConcat(arraySlice(splitByChar(' ', ifNull(creator.name, '')), 1, 2), ' ') AS creator_name,
@@ -129,7 +145,89 @@ SELECT
          AND lower(jc.issue_assignee) != lower(jc.issue_reporter) 
          AND lower(jc.issue_assignee) != '' 
          AND lower(jc.issue_assignee) IS NOT NULL 
-         AND lower(jc.issue_assignee) IN valid_recipients 
+         AND arrayExists(v -> v = lower(jc.issue_assignee), valid_recipients) 
+    THEN lower(jc.issue_assignee) 
+    ELSE '' 
+  END AS target_emails
+
+FROM jira_changelog AS jc
+
+-- Присоединяем справочник пользователей Jira для отображения имён
+LEFT JOIN jira_groups_and_users AS reporter ON reporter.email = jc.issue_reporter
+LEFT JOIN jira_groups_and_users AS assignee ON assignee.email = jc.issue_assignee
+LEFT JOIN jira_groups_and_users AS creator ON creator.email = jc.created_by
+
+-- Ограничиваем выборку конкретным событием
+WHERE
+      jc.issue_key = ${a1.case_id}
+  AND jc.issue_event_type_name = ${a1.event_name}
+  AND jc.created_at = ${a1.event_time}
+  
+-- Группировка по всем полям для устранения дубликатов
+GROUP BY ALL
+
+--! SQL для issue without epic link
+WITH
+  -- Разрешённые email-адреса:
+  --   активная глобальная подписка,
+  --   подписка на конкретное событие ("Новая задача, где ты - Исполнитель")
+  (
+    SELECT 
+      arrayDistinct(groupArray(lower(email)))
+    FROM 
+      teams_notification_subscriptions
+    WHERE is_active = 1
+          AND event_type_id = toUUID('3112016b-4517-46ac-8573-ddfe670da4b4')
+          AND lower(email) IN (
+        SELECT 
+          lower(email_address)
+        FROM 
+          teams_notification_recipients
+        WHERE is_active = 1
+      )
+  ) AS valid_recipients
+  
+-- Формируем итоговый набор данных для отправки уведомления
+SELECT
+  jc.* EXCEPT (
+  issue_due_date, 
+  changelog_items, 
+  comment_body, 
+  created_at, 
+  issue_responsible_analytic, 
+  issue_responsible_implementer, 
+  issue_responsible_tsupporter, 
+  issue_responsible_sales, 
+  issue_description),
+
+  -- Проверяем наличие описания, при его отсутствии подставляем текст-заглушку
+  if(jc.issue_description = '', 'описание отсутствует', jc.issue_description) as issue_description,
+
+  -- Форматируем дату создания события
+--   formatDateTime(jc.created_at, '%d.%m.%y %H:%i') as created_at,
+
+  -- Формируем срок выполнения с указанием количества оставшихся дней
+  ifNull(concat(
+    formatDateTime(jc.issue_due_date, '%d.%m.%y'),
+    ' (через ',
+    date_diff('dd', today(), jc.issue_due_date),
+    ' дн.)'
+  ), 'отсутствует') as issue_due_date,
+
+  -- Преобразуем ФИО участников в краткую форму (до двух слов)
+  arrayStringConcat(arraySlice(splitByChar(' ', ifNull(creator.name, '')), 1, 2), ' ') AS creator_name,
+  arrayStringConcat(arraySlice(splitByChar(' ', ifNull(reporter.name, '')), 1, 2), ' ') AS reporter_name,
+  arrayStringConcat(arraySlice(splitByChar(' ', ifNull(assignee.name, '')), 1, 2), ' ') AS assignee_name,
+
+  -- Определяем целевого получателя уведомления:
+  --   если исполнитель задачи активен в системе уведомлений и не совпадает с инициатором события или автором задачи,
+  --   то он становится получателем уведомления
+  CASE 
+    WHEN lower(jc.issue_assignee) != lower(jc.created_by) 
+         AND lower(jc.issue_assignee) != lower(jc.issue_reporter) 
+         AND lower(jc.issue_assignee) != '' 
+         AND lower(jc.issue_assignee) IS NOT NULL 
+         AND arrayExists(v -> v = lower(jc.issue_assignee), valid_recipients) 
     THEN lower(jc.issue_assignee) 
     ELSE '' 
   END AS target_emails
@@ -155,39 +253,41 @@ WITH
   
   -- Разрешённые email-адреса:
   --   активная глобальная подписка,
-  --   подписка на конкретное событие ("Назначен исполнителем")
+  --   подписка на конкретное событие ("Новая задача, где ты - Исполнитель")
   (
-    SELECT
-      lower(email)
+    SELECT arrayDistinct(groupArray(lower(email)))
     FROM teams_notification_subscriptions
-    WHERE
-      is_active = 1
+    WHERE is_active = 1
       AND event_type_id = toUUID('3112016b-4517-46ac-8573-ddfe670da4b4')
-    INTERSECT
-    SELECT
-      lower(email_address)
-    FROM teams_notification_recipients
-    WHERE
-      is_active = 1
+      AND lower(email) IN (
+        SELECT lower(email_address)
+        FROM teams_notification_recipients
+        WHERE is_active = 1
+      )
   ) AS valid_recipients
   
 -- Формируем итоговый набор данных для отправки уведомления
 SELECT
-  jc.* EXCEPT(created_at, changelog_items, issue_description),
+    jc.* EXCEPT (
+  issue_due_date, 
+  changelog_items, 
+  comment_body, 
+  created_at, 
+  issue_description),
 
   -- Проверяем наличие описания, при его отсутствии подставляем текст-заглушку
-  if(jc.issue_description = '', 'Описание отсутствует', jc.issue_description) as issue_description,
+  if(jc.issue_description = '', 'описание отсутствует', jc.issue_description) as issue_description,
 
   -- Форматируем дату создания события
-  formatDateTime(jc.created_at, '%d.%m.%y %H:%i') as created_at,
+--   formatDateTime(jc.created_at, '%d.%m.%y %H:%i') as created_at,
 
   -- Формируем срок выполнения с указанием количества оставшихся дней
-  concat(
+  ifNull(concat(
     formatDateTime(jc.issue_due_date, '%d.%m.%y'),
     ' (через ',
     date_diff('dd', today(), jc.issue_due_date),
     ' дн.)'
-  ) as issue_due_date,
+  ), 'отсутствует') as issue_due_date,
 
   -- Преобразуем ФИО участников в краткую форму (до двух слов)
   arrayStringConcat(arraySlice(splitByChar(' ', ifNull(creator.name, '')), 1, 2), ' ') AS creator_name,
@@ -206,7 +306,7 @@ SELECT
       responsible ->
         responsible != ''
         AND responsible IS NOT NULL
-        AND lower(responsible) IN valid_recipients,
+        AND arrayExists(v -> v = lower(responsible), valid_recipients),
       [
         lower(jc.issue_assignee),
         lower(jc.issue_responsible_implementer),
