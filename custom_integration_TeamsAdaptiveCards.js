@@ -409,7 +409,6 @@ const executeSystemBlock = (service, style, badgeText, mainText, greetingText, b
   const card = {
     type: "AdaptiveCard",
     version: "1.5",
-    id: cardUuid,
     body: [
       {
         type: "TextBlock",
@@ -495,7 +494,7 @@ const executeSystemBlock = (service, style, badgeText, mainText, greetingText, b
         spacing: "ExtraLarge"
       }] : [])
     ],
-    data: { targetEmails }
+    data: { targetEmails, card_uuid: input.card_uuid, send_uid: sendUid }
   };
 
   const response = sendCard(service, webhookUrl, card, sendUid);
@@ -516,7 +515,6 @@ const executeJiraBlock = (service, blockType, bundle) => {
   const card = {
     type: "AdaptiveCard",
     version: "1.5",
-    id: cardUuid,
     body: cardBody,
     actions: [
       {
@@ -527,7 +525,7 @@ const executeJiraBlock = (service, blockType, bundle) => {
         ...(blockType === 'assignee' || blockType === 'nested' ? { iconUrl: "icon:Link" } : {})
       }
     ],
-    data: { targetEmails: common.targetEmails }
+    data: { targetEmails: common.targetEmails, card_uuid: input.card_uuid, send_uid: common.sendUid }
   };
   const response = sendCard(service, common.webhookUrl, card, common.sendUid);
   const duration = Date.now() - common.start;
@@ -564,7 +562,6 @@ const executeFiredEmployeeBlock = (service, bundle) => {
   const card = {
     type: "AdaptiveCard",
     version: "1.5",
-    id: cardUuid,
     body: [
       {
         type: "TextBlock",
@@ -632,7 +629,7 @@ const executeFiredEmployeeBlock = (service, bundle) => {
         style: "positive"
       }
     ],
-    data: { targetEmails }
+    data: { targetEmails, card_uuid: input.card_uuid, send_uid: sendUid }
   };
 
   const response = sendCard(service, webhookUrl, card, sendUid);
@@ -857,6 +854,40 @@ app = {
           "Перейти в отчёт",
           bundle,
           "Подробнее о каждом типе уведомлений вы можете узнать в отчёте в разделе **«Какие типы уведомлений бывают?»**.",
+          { title: "", items: cardNamesArray }
+        );
+      }
+    },
+    AdminGlobalSubscriptionDeactivation: {
+      label: "Админ. отключение глобальной подписки и типов уведомлений (Системное)",
+      description: "Отправляет адаптивную карточку в Teams при отключении пользователя от глобальной подписки на уведомления.",
+      inputFields: [
+        { key: "employee_name", label: "Имя сотрудника", type: "text", hint: "employee_name", required: true },
+        { key: "card_names", label: "Типы уведомлений", type: "text", hint: "card_names (массив названий через точку с запятой)", required: true },
+        { key: "dashboard_url", label: "Ссылка на дашборд", type: "text", hint: "dashboard_url", required: true },
+        { key: "email", label: "E-mail пользователя", type: "text", hint: "email", required: true },
+        { key: "deactivated_at", label: "Дата отключения", type: "text", hint: "deactivated_at", required: true },
+        { key: "card_uuid", label: "UUID адаптивной карточки", type: "text", hint: "card_uuid", required: true }
+      ],
+
+      executePagination: (service, bundle) => {
+        const input = bundle.inputData;
+        const cardNamesString = (input.card_names || "").replace(/^\[|\]$/g, "");
+        const cardNamesArray = cardNamesString.split(";").map(name => name.trim()).filter(Boolean);
+        bundle.inputData.target_emails = input.email; // Установить targetEmails как email пользователя
+        return executeSystemBlock(
+          service,
+          "attention",
+          "Системное уведомление",
+          "**Тебя отключили от системы уведомлений Jira → Teams**",
+          `Приветствуем, **${safe(input.employee_name)}**!`,
+          "Мы отключили тебя от глобальной подписки на уведомления и деактивировали следующие типы уведомлений:",
+          [
+            { title: "Дата отключения:", value: safe(input.deactivated_at) }
+          ],
+          null,
+          bundle,
+          null,
           { title: "", items: cardNamesArray }
         );
       }
