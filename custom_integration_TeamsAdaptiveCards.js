@@ -8,6 +8,55 @@ const safe = s => {
   return str.replace(/[\r\n]+/g, " ").replace(/\"/g, "'");
 };
 
+// Преобразует текст из Jira wiki/HTML в Markdown-compatible формат для Teams Adaptive Cards.
+const prettify = input => {
+  if (!input) return '';
+
+  // Удалить HTML-теги
+  let result = input.replace(/<[^>]*>/g, '');
+
+  // Преобразовать Jira wiki в Markdown
+  // Жирный текст: *text* -> **text**
+  result = result.replace(/\*([^*]+)\*/g, '**$1**');
+  // Курсив: _text_ -> *text* (но избегать в URL)
+  // Сначала временно заменить URL
+  const urlPlaceholder = '###URL_PLACEHOLDER###';
+  const urls = [];
+  result = result.replace(/(https?:\/\/[^\s]+)/g, (match) => {
+    urls.push(match);
+    return urlPlaceholder;
+  });
+  result = result.replace(/_([^_]+)_/g, '*$1*');
+  // Восстановить URL
+  urls.forEach(url => {
+    result = result.replace(urlPlaceholder, url);
+  });
+
+  // Код: {{text}} -> `text`
+  result = result.replace(/\{\{([^}]+)\}\}/g, '`$1`');
+  // Ссылки: [text|url] -> [text](url)
+  result = result.replace(/\[([^\|]+)\|([^\]]+)\]/g, '[$1]($2)');
+  // Заголовки: h1. text -> # text
+  result = result.replace(/^h(\d+)\.\s*(.+)$/gm, (match, level, text) => '#'.repeat(parseInt(level)) + ' ' + text);
+  // Изображения: !image.png|alt! -> ![alt](image.png)
+  result = result.replace(/!([^|!]+)(\|([^!]+))?!/g, '![$3]($1)');
+  // Блоки кода: {code:lang} ... {code} -> ```lang ... ```
+  result = result.replace(/\{code(?::(\w+))?\}([\s\S]*?)\{code\}/g, (match, lang, code) => {
+    return '```' + (lang || '') + '\n' + code.trim() + '\n```';
+  });
+  // Упоминания пользователей: [~username] -> @username
+  result = result.replace(/\[~([^\]]+)\]/g, '@$1');
+  // Email: [mailto:email] -> email
+  result = result.replace(/\[mailto:([^\]]+)\]/g, '$1');
+
+  // Очистить лишние пробелы
+  result = result.replace(/\s+/g, ' ').trim();
+  // Удалить кавычки вокруг текста
+  result = result.replace(/^"|"$/g, '');
+
+  return result;
+};
+
 //  Извлекает общие данные из bundle и input, включая URL вебхука, базовый URL Jira, список email-адресов, уникальный ID отправки, время отправки и стартовое время для замера длительности.
 const getCommonData = (bundle, input) => {
   const webhookUrl = bundle.authData.incoming_webhook_url;
@@ -274,7 +323,7 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
               inlines: [
                 {
                   type: "TextRun",
-                  text: safe(input.separated_comment_part),
+                  text: prettify(input.separated_comment_part),
                   wrap: true
                 }
               ]
@@ -296,7 +345,7 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
             {
               type: "RichTextBlock",
               inlines: [
-                { type: "TextRun", text: safe(input.comment_body), wrap: true }
+                { type: "TextRun", text: `${prettify(input.comment_body)}`, wrap: true }
               ]
             }
           ],
@@ -387,7 +436,7 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
           items: [
             {
               type: "TextBlock",
-              text: safe(input.separated_description_part),
+              text: prettify(input.separated_description_part),
               wrap: true
             }
           ]
@@ -406,7 +455,7 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
           items: [
             {
               type: "TextBlock",
-              text: `${safe(input.issue_description)}`,
+              text: `${prettify(input.issue_description)}`,
               wrap: true
             }
           ],
@@ -473,7 +522,7 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
           items: [
             {
               type: "TextBlock",
-              text: safe(input.separated_description_part),
+              text: prettify(input.separated_description_part),
               wrap: true
             }
           ]
@@ -495,7 +544,7 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
               inlines: [
                 {
                   type: "TextRun",
-                  text: `${safe(input.issue_description)}`
+                  text: `${prettify(input.issue_description)}`
                 }
               ]
             }
