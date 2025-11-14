@@ -180,7 +180,7 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
       {
         type: "Badge",
         text: badgeText,
-        size: "Large",
+        size: "ExtraLarge",
         style: blockType === 'comment' ? "Accent" : blockType === 'status' ? "Accent" : blockType === 'assignee' ? "Attention" : blockType === 'specific_comment' ? "Warning" : "Good",
         icon: blockType === 'comment' ? "CommentAdd" : blockType === 'status' ? "ArrowSync" : "PersonSquare"
       },
@@ -224,27 +224,87 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
       }
     ];
   } else if (blockType === 'comment') {
-    specificParts = [
-      {
-        type: "TextBlock",
-        text: `**${safe(input.comment_author)}** пишет:`,
-        wrap: true,
-        spacing: "Small"
-      },
-      {
-        type: "Container",
-        items: [
-          {
-            type: "RichTextBlock",
-            inlines: [
-              { type: "TextRun", text: `${safe(input.comment_body)}`, wrap: true }
-            ]
-          }
-        ],
-        style: "emphasis",
-        spacing: "None"
-      }
-    ];
+    if (input.separated_comment_part && input.separated_comment_part.trim() !== '') {
+      specificParts = [
+        {
+          type: "TextBlock",
+          text: `**${safe(input.comment_author)}** пишет:`,
+          wrap: true,
+          spacing: "Small"
+        },
+        {
+          type: "TextBlock",
+          text: safe(input.original_comment),
+          wrap: true,
+          spacing: "None"
+        },
+        {
+          type: "ActionSet",
+          id: "showMore",
+          actions: [
+            {
+              type: "Action.ToggleVisibility",
+              title: "Показать полностью",
+              targetElements: ["fullComment", "showMore", "showLess"],
+              mode: "secondary"
+            }
+          ]
+        },
+        {
+          type: "ActionSet",
+          id: "showLess",
+          isVisible: false,
+          actions: [
+            {
+              type: "Action.ToggleVisibility",
+              title: "Скрыть",
+              targetElements: ["fullComment", "showMore", "showLess"]
+            }
+          ]
+        },
+        {
+          type: "Container",
+          id: "fullComment",
+          isVisible: false,
+          style: "emphasis",
+          spacing: "None",
+          items: [
+            {
+              type: "RichTextBlock",
+              inlines: [
+                {
+                  type: "TextRun",
+                  text: safe(input.separated_comment_part),
+                  wrap: true
+                }
+              ]
+            }
+          ]
+        }
+      ];
+    } else {
+      specificParts = [
+        {
+          type: "TextBlock",
+          text: `**${safe(input.comment_author)}** пишет:`,
+          wrap: true,
+          spacing: "Small"
+        },
+        {
+          type: "Container",
+          items: [
+            {
+              type: "RichTextBlock",
+              inlines: [
+                { type: "TextRun", text: safe(input.comment_body), wrap: true }
+              ]
+            }
+          ],
+          style: "emphasis",
+          spacing: "None"
+        }
+      ];
+    }
   } else if (blockType === 'status') {
     specificParts = [
       {
@@ -261,8 +321,15 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
             inlines: [
               {
                 type: "TextRun",
-                text: `${safe(input.from_status)} → ${safe(input.to_status)}`,
+                text: `${safe(input.from_status)} `,
                 wrap: true
+              },
+              {
+                type: "TextRun",
+                text: ` → ${safe(input.to_status)}`,
+                wrap: true,
+                weight: "Bolder",
+                size: "Medium"
               }
             ]
           }
@@ -272,6 +339,82 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
       }
     ];
   } else if (blockType === 'assignee') {
+    let descriptionParts = [];
+    if (input.separated_description_part && input.separated_description_part.trim() !== '') {
+      descriptionParts = [
+        {
+          type: "TextBlock",
+          text: "**Описание:**",
+          wrap: true,
+          spacing: "Small"
+        },
+        {
+          type: "TextBlock",
+          text: safe(input.original_description),
+          wrap: true,
+          spacing: "None"
+        },
+        {
+          type: "ActionSet",
+          id: "showMoreDesc",
+          actions: [
+            {
+              type: "Action.ToggleVisibility",
+              title: "Показать полностью",
+              targetElements: ["fullDescription", "showMoreDesc", "showLessDesc"],
+              mode: "secondary"
+            }
+          ]
+        },
+        {
+          type: "ActionSet",
+          id: "showLessDesc",
+          isVisible: false,
+          actions: [
+            {
+              type: "Action.ToggleVisibility",
+              title: "Скрыть",
+              targetElements: ["fullDescription", "showMoreDesc", "showLessDesc"]
+            }
+          ]
+        },
+        {
+          type: "Container",
+          id: "fullDescription",
+          isVisible: false,
+          style: "emphasis",
+          spacing: "None",
+          items: [
+            {
+              type: "TextBlock",
+              text: safe(input.separated_description_part),
+              wrap: true
+            }
+          ]
+        }
+      ];
+    } else {
+      descriptionParts = [
+        {
+          type: "TextBlock",
+          text: "**Описание:**",
+          wrap: true,
+          spacing: "Small"
+        },
+        {
+          type: "Container",
+          items: [
+            {
+              type: "TextBlock",
+              text: `${safe(input.issue_description)}`,
+              wrap: true
+            }
+          ],
+          style: "emphasis",
+          spacing: "None"
+        }
+      ];
+    }
     specificParts = [
       {
         type: "TextBlock",
@@ -279,26 +422,89 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
         wrap: true,
         spacing: "Small"
       },
-      {
-        type: "TextBlock",
-        text: "**Описание:**",
-        wrap: true,
-        spacing: "Small"
-      },
-      {
-        type: "Container",
-        items: [
-          {
-            type: "TextBlock",
-            text: `${safe(input.issue_description)}`,
-            wrap: true
-          }
-        ],
-        style: "emphasis",
-        spacing: "None"
-      }
+      ...descriptionParts
     ];
   } else if (blockType === 'nested') {
+    let descriptionParts = [];
+    if (input.separated_description_part && input.separated_description_part.trim() !== '') {
+      descriptionParts = [
+        {
+          type: "TextBlock",
+          text: "**Описание задачи:**",
+          wrap: true,
+          spacing: "Small"
+        },
+        {
+          type: "TextBlock",
+          text: safe(input.original_description),
+          wrap: true,
+          spacing: "None"
+        },
+        {
+          type: "ActionSet",
+          id: "showMoreDesc",
+          actions: [
+            {
+              type: "Action.ToggleVisibility",
+              title: "Показать полностью",
+              targetElements: ["fullDescription", "showMoreDesc", "showLessDesc"],
+              mode: "secondary"
+            }
+          ]
+        },
+        {
+          type: "ActionSet",
+          id: "showLessDesc",
+          isVisible: false,
+          actions: [
+            {
+              type: "Action.ToggleVisibility",
+              title: "Скрыть",
+              targetElements: ["fullDescription", "showMoreDesc", "showLessDesc"]
+            }
+          ]
+        },
+        {
+          type: "Container",
+          id: "fullDescription",
+          isVisible: false,
+          style: "emphasis",
+          spacing: "None",
+          items: [
+            {
+              type: "TextBlock",
+              text: safe(input.separated_description_part),
+              wrap: true
+            }
+          ]
+        }
+      ];
+    } else {
+      descriptionParts = [
+        {
+          type: "TextBlock",
+          text: "**Описание задачи:**",
+          wrap: true,
+          spacing: "Small"
+        },
+        {
+          type: "Container",
+          items: [
+            {
+              type: "RichTextBlock",
+              inlines: [
+                {
+                  type: "TextRun",
+                  text: `${safe(input.issue_description)}`
+                }
+              ]
+            }
+          ],
+          style: "emphasis",
+          spacing: "None"
+        }
+      ];
+    }
     specificParts = [
       {
         type: "TextBlock",
@@ -306,28 +512,7 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
         wrap: true,
         spacing: "Small"
       },
-      {
-        type: "TextBlock",
-        text: "**Описание задачи:**",
-        wrap: true,
-        spacing: "Small"
-      },
-      {
-        type: "Container",
-        items: [
-          {
-            type: "RichTextBlock",
-            inlines: [
-              {
-                type: "TextRun",
-                text: `${safe(input.issue_description)}`
-              }
-            ]
-          }
-        ],
-        style: "emphasis",
-        spacing: "None"
-      }
+      ...descriptionParts
     ];
   }
 
@@ -428,7 +613,7 @@ const executeSystemBlock = (service, style, badgeText, mainText, greetingText, b
           {
             type: "Badge",
             text: badgeText,
-            size: "Large",
+            size: "ExtraLarge",
             style: style === "accent" ? "Good" : "Attention",
             icon: style === "accent" ? "MegaphoneLoud" : "Warning",
             horizontalAlignment: "Center"
@@ -581,7 +766,7 @@ const executeFiredEmployeeBlock = (service, bundle) => {
           {
             type: "Badge",
             text: "Незакрытые задачи у неактивных пользователей",
-            size: "Large",
+            size: "ExtraLarge",
             style: "Attention",
             icon: "Warning"
           },
@@ -653,6 +838,8 @@ app = {
         { key: "issue_type_name", label: "Название типа задачи", type: "text", hint: "issue_type_name", required: true },
         { key: "comment_author", label: "Автор комментария", type: "text", hint: "comment_author", required: true },
         { key: "comment_body", label: "Текст комментария", type: "text", hint: "comment_body", required: true },
+        { key: "original_comment", label: "Короткий комментарий", type: "text", hint: "original_comment", required: true },
+        { key: "separated_comment_part", label: "Отделенная часть комментария", type: "text", hint: "separated_comment_part" },
         { key: "context_issue_key", label: "Ключ контекстной задачи", type: "text", hint: "context_issue_key (если задача - то ссылка на эпик, если подзадача, то ссылка на родителя)" },
         { key: "context_issue_summary", label: "Название контекстной задачи", type: "text", hint: "context_issue_summary (если задача - то ссылка на эпик, если подзадача, то ссылка на родителя)" },
         { key: "reporter", label: "Автор задачи", type: "text", hint: "reporter" },
@@ -701,6 +888,8 @@ app = {
         { key: "issue_type", label: "Тип задачи", type: "text", hint: "issue_type", required: true },
         { key: "issue_type_name", label: "Название типа задачи", type: "text", hint: "issue_type_name", required: true },
         { key: "issue_description", label: "Описание задачи", type: "text", hint: "issue_description", required: true },
+        { key: "original_description", label: "Короткое описание", type: "text", hint: "original_description", required: true },
+        { key: "separated_description_part", label: "Отделенная часть описания", type: "text", hint: "separated_description_part" },
         { key: "context_issue_key", label: "Ключ контекстной задачи", type: "text", hint: "context_issue_key (если задача - то ссылка на эпик, если подзадача, то ссылка на родителя)" },
         { key: "context_issue_summary", label: "Название контекстной задачи", type: "text", hint: "context_issue_summary (если задача - то ссылка на эпик, если подзадача, то ссылка на родителя)" },
         { key: "reporter", label: "Автор задачи", type: "text", hint: "reporter" },
@@ -724,6 +913,8 @@ app = {
         { key: "issue_type", label: "Тип задачи", type: "text", hint: "issue_type", required: true },
         { key: "issue_type_name", label: "Название типа задачи", type: "text", hint: "issue_type_name", required: true },
         { key: "issue_description", label: "Описание задачи", type: "text", hint: "issue_description", required: true },
+        { key: "original_description", label: "Короткое описание", type: "text", hint: "original_description", required: true },
+        { key: "separated_description_part", label: "Отделенная часть описания", type: "text", hint: "separated_description_part" },
         { key: "context_issue_key", label: "Ключ контекстной задачи", type: "text", hint: "context_issue_key (если задача - то ссылка на эпик, если подзадача, то ссылка на родителя)" },
         { key: "context_issue_summary", label: "Название контекстной задачи", type: "text", hint: "context_issue_summary (если задача - то ссылка на эпик, если подзадача, то ссылка на родителя)" },
         { key: "reporter", label: "Автор задачи", type: "text", hint: "reporter" },
