@@ -631,7 +631,7 @@ const buildOutput = (response, sendTime, duration, targetEmails, webhookUrl, sen
 };
 
 // Выполняет системный блок уведомления, строя и отправляя карточку с заданным стилем, текстами и фактами, возвращая результат.
-const executeSystemBlock = (service, style, badgeText, mainText, greetingText, bodyText, facts, actionTitle, bundle, additionalText, listBlock) => {
+const executeSystemBlock = (service, style, badgeText, mainText, greetingText, bodyText, facts, actionTitle, bundle, listBlock) => {
   const input = bundle.inputData;
   const webhookUrl = bundle.authData.incoming_webhook_url;
   const targetEmails = (input.target_emails || "").split(",").map(e => e.trim()).filter(Boolean);
@@ -706,13 +706,6 @@ const executeSystemBlock = (service, style, badgeText, mainText, greetingText, b
         type: "FactSet",
         facts: facts
       },
-      ...(additionalText ? [{
-        type: "TextBlock",
-        text: additionalText,
-        wrap: true,
-        spacing: "Large",
-        isSubtle: true
-      }] : []),
       ...(actionTitle ? [{
         type: "ActionSet",
         actions: [
@@ -871,6 +864,33 @@ const executeFiredEmployeeBlock = (service, bundle) => {
   return buildOutput(response, sendTime, duration, targetEmails, webhookUrl, sendUid, cardUuid);
 };
 
+// Преобразует строковое поле card_names в массив (ожидается строка с названиями через "; ", при этом поддерживаются и старые форматы).
+const extractCardNames = (raw) => {
+  if (!raw || typeof raw !== "string") {
+    return [];
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return [];
+  }
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed.map(item => String(item).trim()).filter(Boolean);
+      }
+    } catch (error) {
+      // Fallback to manual splitting if JSON.parse fails
+    }
+  }
+  const normalized = trimmed.replace(/^\[|\]$/g, "");
+  const segments = normalized
+    .split(/;\s+|;\s*|,\s+|,\s*|\n+/)
+    .map(name => name.replace(/^["']+|["']+$/g, "").trim())
+    .filter(Boolean);
+  return segments;
+};
+
 app = {
   schema: 2,
   version: '1.5.0',
@@ -1000,7 +1020,6 @@ app = {
         ],
         "Перейти в отчет",
         bundle,
-        null,
         null
       )
     },
@@ -1029,7 +1048,6 @@ app = {
         ],
         null,
         bundle,
-        null,
         null
       )
     },
@@ -1064,71 +1082,165 @@ app = {
 
       executePagination: (service, bundle) => executeJiraBlock(service, 'specific_comment', bundle)
     },
-    AdminGlobalSubscriptionActivation: {
-      label: "Админ. подключение глобальной подписки и типов уведомлений (Системное)",
-      description: "Отправляет адаптивную карточку в Teams при подключении пользователя к глобальной подписке на уведомления.",
+    GlobalSubscriptionActivation: {
+      label: "Подписка (глобальная, типовая): активация (Системное)",
+      description: "Карточка о системном или самостоятельном подключении пользователя к глобальной подписке и выбранным типам уведомлений.",
       inputFields: [
         { key: "employee_name", label: "Имя сотрудника", type: "text", hint: "employee_name", required: true },
-        { key: "card_names", label: "Типы уведомлений", type: "text", hint: "card_names (массив названий через точку с запятой)", required: true },
+        { key: "card_names", label: "Типы уведомлений", type: "text", hint: "card_names (строка с названиями через '; ')", required: false },
         { key: "dashboard_url", label: "Ссылка на дашборд", type: "text", hint: "dashboard_url", required: true },
         { key: "email", label: "E-mail пользователя", type: "text", hint: "email", required: true },
         { key: "started_at", label: "Дата подключения", type: "text", hint: "started_at", required: true },
+        { key: "change_source", label: "Кто инициировал изменение", type: "text", hint: "change_source (admin или user)", required: false },
+        { key: "change_scope", label: "Что изменилось", type: "text", hint: "change_scope (global, types, both)", required: false },
         { key: "card_uuid", label: "UUID адаптивной карточки", type: "text", hint: "card_uuid", required: true }
       ],
 
       executePagination: (service, bundle) => {
         const input = bundle.inputData;
-        const cardNamesString = (input.card_names || "").replace(/^\[|\]$/g, "");
-        const cardNamesArray = cardNamesString.split(";").map(name => name.trim()).filter(Boolean);
+        const changeSource = (input.change_source || "admin").toLowerCase();
+        const isAdminChange = changeSource !== "user";
+        const scopeRaw = (input.change_scope || (isAdminChange ? "both" : "types")).toLowerCase();
+        const allowedScopes = new Set(["global", "types", "both"]);
+        const changeScope = allowedScopes.has(scopeRaw) ? scopeRaw : "both";
+        const includeTypeList = changeScope === "types" || changeScope === "both";
+        const cardNamesArray = includeTypeList ? extractCardNames(input.card_names).map(name => safe(name)) : [];
         bundle.inputData.target_emails = input.email; // Установить targetEmails как email пользователя
+        const activationCopy = isAdminChange
+          ? {
+            style: "accent",
+            badgeText: "Системное уведомление",
+            mainText: "**Тебя подключили к системе уведомлений Jira → Teams**",
+            greetingText: `Приветствуем, **${safe(input.employee_name)}**!`,
+            bodyText: "Мы подключили тебя к глобальной подписке на уведомления и активировали следующие типы уведомлений:",
+            includeList: cardNamesArray.length > 0
+          }
+          : (() => {
+            switch (changeScope) {
+              case "global":
+                return {
+                  style: "accent",
+                  badgeText: "Системное уведомление",
+                  mainText: "**Ты включил глобальную подписку Jira → Teams**",
+                  greetingText: `Приветствуем, **${safe(input.employee_name)}**!`,
+                  bodyText: "Ты самостоятельно подключил глобальную подписку на уведомления Jira → Teams.",
+                  includeList: false
+                };
+              case "types":
+                return {
+                  style: "accent",
+                  badgeText: "Системное уведомление",
+                  mainText: "**Ты активировал типы уведомлений Jira → Teams**",
+                  greetingText: `Приветствуем, **${safe(input.employee_name)}**!`,
+                  bodyText: "Ты самостоятельно активировал следующие типы уведомлений:",
+                  includeList: cardNamesArray.length > 0
+                };
+              case "both":
+              default:
+                return {
+                  style: "accent",
+                  badgeText: "Системное уведомление",
+                  mainText: "**Ты активировал систему уведомлений Jira → Teams**",
+                  greetingText: `Приветствуем, **${safe(input.employee_name)}**!`,
+                  bodyText: "Ты самостоятельно подключил глобальную подписку на уведомления и активировал следующие типы уведомлений:",
+                  includeList: cardNamesArray.length > 0
+                };
+            }
+          })();
         return executeSystemBlock(
           service,
-          "accent",
-          "Системное уведомление",
-          "**Тебя подключили к системе уведомлений Jira → Teams**",
-          `Приветствуем, **${safe(input.employee_name)}**!`,
-          "Мы подключили тебя к глобальной подписке на уведомления и активировали следующие типы уведомлений:",
+          activationCopy.style,
+          activationCopy.badgeText,
+          activationCopy.mainText,
+          activationCopy.greetingText,
+          activationCopy.bodyText,
           [
             { title: "Дата подключения:", value: safe(input.started_at) }
           ],
           "Перейти в отчёт",
           bundle,
-          "Подробнее о каждом типе уведомлений вы можете узнать в отчёте в разделе **«Какие типы уведомлений бывают?»**.",
-          { title: "", items: cardNamesArray }
+          activationCopy.includeList ? { title: "", items: cardNamesArray } : null
         );
       }
     },
-    AdminGlobalSubscriptionDeactivation: {
-      label: "Админ. отключение глобальной подписки и типов уведомлений (Системное)",
-      description: "Отправляет адаптивную карточку в Teams при отключении пользователя от глобальной подписки на уведомления.",
+    GlobalSubscriptionDeactivation: {
+      label: "Подписка (глобальная, типовая): деактивация (Системное)",
+      description: "Карточка о системном или самостоятельном отключении пользователя от глобальной подписки и типов уведомлений.",
       inputFields: [
         { key: "employee_name", label: "Имя сотрудника", type: "text", hint: "employee_name", required: true },
-        { key: "card_names", label: "Типы уведомлений", type: "text", hint: "card_names (массив названий через точку с запятой)", required: true },
+        { key: "card_names", label: "Типы уведомлений", type: "text", hint: "card_names (строка с названиями через '; ')", required: false },
         { key: "dashboard_url", label: "Ссылка на дашборд", type: "text", hint: "dashboard_url", required: true },
         { key: "email", label: "E-mail пользователя", type: "text", hint: "email", required: true },
         { key: "deactivated_at", label: "Дата отключения", type: "text", hint: "deactivated_at", required: true },
+        { key: "change_source", label: "Кто инициировал изменение", type: "text", hint: "change_source (admin или user)", required: false },
+        { key: "change_scope", label: "Что изменилось", type: "text", hint: "change_scope (global, types, both)", required: false },
         { key: "card_uuid", label: "UUID адаптивной карточки", type: "text", hint: "card_uuid", required: true }
       ],
 
       executePagination: (service, bundle) => {
         const input = bundle.inputData;
-        const cardNamesString = (input.card_names || "").replace(/^\[|\]$/g, "");
-        const cardNamesArray = cardNamesString.split(";").map(name => name.trim()).filter(Boolean);
+        const changeSource = (input.change_source || "admin").toLowerCase();
+        const isAdminChange = changeSource !== "user";
+        const scopeRaw = (input.change_scope || (isAdminChange ? "both" : "types")).toLowerCase();
+        const allowedScopes = new Set(["global", "types", "both"]);
+        const changeScope = allowedScopes.has(scopeRaw) ? scopeRaw : "both";
+        const includeTypeList = changeScope === "types" || changeScope === "both";
+        const cardNamesArray = includeTypeList ? extractCardNames(input.card_names).map(name => safe(name)) : [];
         bundle.inputData.target_emails = input.email; // Установить targetEmails как email пользователя
+        const deactivationCopy = isAdminChange
+          ? {
+            style: "attention",
+            badgeText: "Системное уведомление",
+            mainText: "**Тебя отключили от системы уведомлений Jira → Teams**",
+            greetingText: `Приветствуем, **${safe(input.employee_name)}**!`,
+            bodyText: "Мы отключили тебя от глобальной подписки на уведомления и деактивировали следующие типы уведомлений:",
+            includeList: cardNamesArray.length > 0
+          }
+          : (() => {
+            switch (changeScope) {
+              case "global":
+                return {
+                  style: "attention",
+                  badgeText: "Системное уведомление",
+                  mainText: "**Ты отключил глобальную подписку Jira → Teams**",
+                  greetingText: `Приветствуем, **${safe(input.employee_name)}**!`,
+                  bodyText: "Ты самостоятельно отключил глобальную подписку на уведомления Jira → Teams.",
+                  includeList: false
+                };
+              case "types":
+                return {
+                  style: "attention",
+                  badgeText: "Системное уведомление",
+                  mainText: "**Ты отключил типы уведомлений Jira → Teams**",
+                  greetingText: `Приветствуем, **${safe(input.employee_name)}**!`,
+                  bodyText: "Ты самостоятельно отключил следующие типы уведомлений:",
+                  includeList: cardNamesArray.length > 0
+                };
+              case "both":
+              default:
+                return {
+                  style: "attention",
+                  badgeText: "Системное уведомление",
+                  mainText: "**Ты отключил систему уведомлений Jira → Teams**",
+                  greetingText: `Приветствуем, **${safe(input.employee_name)}**!`,
+                  bodyText: "Ты самостоятельно отключил глобальную подписку на уведомления и деактивировал следующие типы уведомлений:",
+                  includeList: cardNamesArray.length > 0
+                };
+            }
+          })();
         return executeSystemBlock(
           service,
-          "attention",
-          "Системное уведомление",
-          "**Тебя отключили от системы уведомлений Jira → Teams**",
-          `Приветствуем, **${safe(input.employee_name)}**!`,
-          "Мы отключили тебя от глобальной подписки на уведомления и деактивировали следующие типы уведомлений:",
+          deactivationCopy.style,
+          deactivationCopy.badgeText,
+          deactivationCopy.mainText,
+          deactivationCopy.greetingText,
+          deactivationCopy.bodyText,
           [
             { title: "Дата отключения:", value: safe(input.deactivated_at) }
           ],
           null,
           bundle,
-          null,
-          { title: "", items: cardNamesArray }
+          deactivationCopy.includeList ? { title: "", items: cardNamesArray } : null
         );
       }
     }
