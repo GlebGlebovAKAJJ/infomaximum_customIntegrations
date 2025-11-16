@@ -864,7 +864,7 @@ const executeFiredEmployeeBlock = (service, bundle) => {
   return buildOutput(response, sendTime, duration, targetEmails, webhookUrl, sendUid, cardUuid);
 };
 
-// Преобразует строковое поле card_names в массив (ожидается строка с названиями через "; ", при этом поддерживаются и старые форматы).
+// Преобразует строковое поле card_names в массив (ожидается строка с названиями только через "; ", при этом сохраняется поддержка JSON-массивов).
 const extractCardNames = (raw) => {
   if (!raw || typeof raw !== "string") {
     return [];
@@ -885,7 +885,7 @@ const extractCardNames = (raw) => {
   }
   const normalized = trimmed.replace(/^\[|\]$/g, "");
   const segments = normalized
-    .split(/;\s+|;\s*|,\s+|,\s*|\n+/)
+    .split(/;\s*/)
     .map(name => name.replace(/^["']+|["']+$/g, "").trim())
     .filter(Boolean);
   return segments;
