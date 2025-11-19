@@ -1558,8 +1558,8 @@ const extractCardNames = (raw) => {
 
 app = {
   schema: 2,
-  version: '0.0.9',
-  label: 'Jira → Teams Уведомления, экспериментальная версия',
+  version: '1.6.0',
+  label: 'Jira → Teams Уведомления',
   description: 'Интеллектуальные уведомления о событиях Jira в Microsoft Teams. Автоматически адаптируется под тип задачи (эпик, задача, подзадача) и роль получателя',
   blocks: {
     NewComment: {
