@@ -4,8 +4,353 @@
 const safe = s => {
   if (!s) return "-";
   const str = String(s);
-  if (!/[\r\n\"]/.test(str)) return str;
+  if (!str.includes('\r') && !str.includes('\n') && !str.includes('"')) {
+    return str;
+  }
   return str.replace(/[\r\n]+/g, " ").replace(/\"/g, "'");
+};
+
+const decodeUriComponentSafe = value => {
+  if (typeof value !== 'string' || !value.length) {
+    return value;
+  }
+  try {
+    return decodeURIComponent(value);
+  } catch (error) {
+    return value;
+  }
+};
+
+const stripUrlParams = value => {
+  if (typeof value !== 'string' || !value.length) {
+    return value;
+  }
+  const questionIndex = value.indexOf('?');
+  const hashIndex = value.indexOf('#');
+  let cutoff = value.length;
+  if (questionIndex >= 0) {
+    cutoff = Math.min(cutoff, questionIndex);
+  }
+  if (hashIndex >= 0) {
+    cutoff = Math.min(cutoff, hashIndex);
+  }
+  return value.slice(0, cutoff);
+};
+
+const appendFormattedTextRuns = (inlines, text, baseStyle = {}) => {
+  if (!text) {
+    return;
+  }
+  let buffer = '';
+  const flushBuffer = () => {
+    if (!buffer) return;
+    inlines.push({ type: 'TextRun', text: buffer, wrap: true, ...baseStyle });
+    buffer = '';
+  };
+  const pushStyled = (value, extra = {}) => {
+    if (!value) return;
+    inlines.push({ type: 'TextRun', text: value, wrap: true, ...baseStyle, ...extra });
+  };
+  let i = 0;
+  while (i < text.length) {
+    if (text.startsWith('**', i)) {
+      const end = text.indexOf('**', i + 2);
+      if (end > i + 2) {
+        flushBuffer();
+        pushStyled(text.slice(i + 2, end), { weight: 'Bolder' });
+        i = end + 2;
+        continue;
+      }
+    }
+    if (text[i] === '*' && text[i + 1] !== '*') {
+      const end = text.indexOf('*', i + 1);
+      if (end > i + 1) {
+        flushBuffer();
+        pushStyled(text.slice(i + 1, end), { italic: true });
+        i = end + 1;
+        continue;
+      }
+    }
+    buffer += text[i];
+    i += 1;
+  }
+  flushBuffer();
+};
+
+const highlightMentionsInInlines = inlines => {
+  if (!Array.isArray(inlines) || !inlines.length) {
+    return inlines;
+  }
+  const mentionRegex = /@[A-Za-z0-9._-]+/g;
+  const isBoundary = char => !char || /[\s([<>{},.!?:;"'\-]/.test(char);
+  const result = [];
+  inlines.forEach(inline => {
+    if (!inline || inline.type !== 'TextRun' || typeof inline.text !== 'string' || !inline.text.length) {
+      result.push(inline);
+      return;
+    }
+    const text = inline.text;
+    mentionRegex.lastIndex = 0;
+    let lastIndex = 0;
+    let match;
+    while ((match = mentionRegex.exec(text)) !== null) {
+      const startIndex = match.index;
+      const endIndex = startIndex + match[0].length;
+      const prevChar = startIndex > 0 ? text[startIndex - 1] : '';
+      const nextChar = endIndex < text.length ? text[endIndex] : '';
+      if (!isBoundary(prevChar) || !isBoundary(nextChar)) {
+        continue;
+      }
+      if (startIndex > lastIndex) {
+        result.push({ ...inline, text: text.slice(lastIndex, startIndex) });
+      }
+      result.push({
+        ...inline,
+        text: match[0],
+        weight: 'Bolder',
+        color: 'Warning',
+        size: 'Large'
+      });
+      lastIndex = endIndex;
+    }
+    if (lastIndex === 0 || lastIndex < text.length) {
+      result.push({ ...inline, text: text.slice(lastIndex) });
+    }
+  });
+  return result;
+};
+
+const buildRichTextInlines = text => {
+  const content = typeof text === 'string' ? text : '';
+  if (!content.length) {
+    return [{ type: 'TextRun', text: '', wrap: true }];
+  }
+  const inlines = [];
+  const linkRegex = /(!?)\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+  let lastIndex = 0;
+  let match;
+  while ((match = linkRegex.exec(content)) !== null) {
+    const [fullMatch, bang, label, url] = match;
+    if (match.index > lastIndex) {
+      appendFormattedTextRuns(inlines, content.slice(lastIndex, match.index));
+    }
+    if (bang === '!') {
+      appendFormattedTextRuns(inlines, fullMatch);
+      lastIndex = match.index + fullMatch.length;
+      continue;
+    }
+    appendFormattedTextRuns(inlines, label, { color: 'Accent', selectAction: { type: 'Action.OpenUrl', url } });
+    lastIndex = match.index + fullMatch.length;
+  }
+  appendFormattedTextRuns(inlines, content.slice(lastIndex));
+  if (!inlines.length) {
+    inlines.push({ type: 'TextRun', text: content, wrap: true });
+  }
+  return highlightMentionsInInlines(inlines);
+};
+
+const splitRowStringIntoCells = rowString => {
+  const sanitized = (rowString || '').replace(/\r/g, '').trim();
+  if (!sanitized.length) return [];
+  let working = sanitized;
+  if (working.startsWith('|')) working = working.slice(1);
+  if (working.endsWith('|')) working = working.slice(0, -1);
+  const cells = [];
+  let current = '';
+  let bracketDepth = 0;
+  for (let i = 0; i < working.length; i++) {
+    const char = working[i];
+    if (char === '[') bracketDepth++;
+    else if (char === ']') bracketDepth = Math.max(0, bracketDepth - 1);
+    if (char === '|' && bracketDepth === 0) {
+      cells.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  cells.push(current.trim());
+  return cells;
+};
+
+const buildTableModel = rowStrings => {
+  if (!rowStrings || !rowStrings.length) return null;
+  const parsedRows = rowStrings.map(splitRowStringIntoCells).filter(row => row.length);
+  const columnCount = parsedRows.reduce((max, row) => Math.max(max, row.length), 0);
+  if (!columnCount || parsedRows.length < 2) {
+    return null;
+  }
+  return { rows: parsedRows, columnCount };
+};
+
+const buildAdaptiveTableElement = (tableModel, hasPreviousElements) => {
+  if (!tableModel || !tableModel.rows || !tableModel.rows.length) {
+    return null;
+  }
+  const columns = Array.from({ length: tableModel.columnCount }, () => ({ width: 1 }));
+  const rows = tableModel.rows.map((cells, rowIndex) => {
+    return {
+      type: 'TableRow',
+      cells: Array.from({ length: tableModel.columnCount }, (_, columnIndex) => {
+        const cellContent = cells[columnIndex] || '';
+        const cell = { type: 'TableCell' };
+        const formatted = prettify(cellContent);
+        if (formatted) {
+          let inlines = buildRichTextInlines(formatted);
+          if (rowIndex === 0) {
+            inlines = inlines.map(inline => ({
+              ...inline,
+              weight: inline.weight || 'Bolder'
+            }));
+          }
+          cell.items = [{ type: 'RichTextBlock', inlines }];
+        }
+        return cell;
+      })
+    };
+  });
+  const tableElement = { type: 'Table', columns, rows };
+  if (hasPreviousElements) {
+    tableElement.spacing = 'Small';
+  }
+  return tableElement;
+};
+
+const splitTextByTables = text => {
+  if (!text) return null;
+  const normalized = text.replace(/\r\n?/g, '\n');
+  const lines = normalized.split('\n');
+  const segments = [];
+  let currentTextLines = [];
+  let currentTableRows = [];
+  let rowLines = [];
+  let insideTable = false;
+  let foundTable = false;
+
+  const pushTextSegment = () => {
+    if (!currentTextLines.length) return;
+    const combined = currentTextLines.join('\n');
+    if (combined.trim()) {
+      segments.push({ type: 'text', value: combined });
+    }
+    currentTextLines = [];
+  };
+
+  const finalizeRow = () => {
+    if (!rowLines.length) return;
+    currentTableRows.push(rowLines.join('\n'));
+    rowLines = [];
+  };
+
+  const pushTableSegment = () => {
+    if (!currentTableRows.length) {
+      insideTable = false;
+      return;
+    }
+    const model = buildTableModel(currentTableRows);
+    if (model) {
+      segments.push({ type: 'table', value: model });
+      foundTable = true;
+    } else {
+      currentTextLines.push(...currentTableRows);
+    }
+    currentTableRows = [];
+    insideTable = false;
+  };
+
+  lines.forEach(line => {
+    const normalizedLine = line.replace(/\u00A0/g, ' ');
+    const trimmed = normalizedLine.trim();
+    const startsWithPipe = trimmed.startsWith('|');
+    if (insideTable) {
+      if (!rowLines.length && !startsWithPipe) {
+        if (!trimmed.length) {
+          return;
+        }
+        pushTableSegment();
+        currentTextLines.push(normalizedLine);
+        return;
+      }
+      rowLines.push(normalizedLine);
+      if (trimmed.endsWith('|')) {
+        finalizeRow();
+      }
+      return;
+    }
+    if (startsWithPipe) {
+      pushTextSegment();
+      insideTable = true;
+      rowLines.push(normalizedLine);
+      if (trimmed.endsWith('|')) {
+        finalizeRow();
+      }
+    } else {
+      currentTextLines.push(normalizedLine);
+    }
+  });
+
+  if (rowLines.length) {
+    finalizeRow();
+  }
+  if (insideTable) {
+    pushTableSegment();
+  }
+  pushTextSegment();
+
+  if (!foundTable) {
+    return null;
+  }
+  return segments;
+};
+
+// Соединяет части комментария, если короткая вырезка оборвана на полпути через Jira-ссылку
+const healSplitCommentChunks = (headChunk = '', tailChunk = '') => {
+  if (!headChunk || !tailChunk) {
+    return { headChunk, tailChunk };
+  }
+  let patchedHead = headChunk;
+  let patchedTail = tailChunk;
+  let iterations = 0;
+  const tryStitch = () => {
+    const lastOpenBracket = patchedHead.lastIndexOf('[');
+    if (lastOpenBracket === -1) {
+      return false;
+    }
+    const fragment = patchedHead.slice(lastOpenBracket);
+    if (!fragment || fragment.includes(']')) {
+      return false;
+    }
+    if (!/\[(https?:\/\/|mailto:|~|#[^\s]*|[^\]|]+\|)/i.test(fragment)) {
+      return false;
+    }
+    const closingIndex = patchedTail.indexOf(']');
+    if (closingIndex === -1) {
+      return false;
+    }
+    const borrowed = patchedTail.slice(0, closingIndex + 1);
+    patchedHead += borrowed;
+    patchedTail = patchedTail.slice(closingIndex + 1);
+    let transferLength = 0;
+    while (transferLength < patchedTail.length) {
+      const char = patchedTail[transferLength];
+      if (char === '\n' || char === '\r') {
+        break;
+      }
+      if (!/[\s.,!?;:)/]/.test(char)) {
+        break;
+      }
+      transferLength += 1;
+    }
+    if (transferLength) {
+      patchedHead += patchedTail.slice(0, transferLength);
+      patchedTail = patchedTail.slice(transferLength);
+    }
+    return true;
+  };
+  while (iterations < 3 && tryStitch()) {
+    iterations += 1;
+  }
+  return { headChunk: patchedHead, tailChunk: patchedTail };
 };
 
 // Преобразует текст из Jira wiki/HTML в Markdown-compatible формат для Teams Adaptive Cards.
@@ -16,8 +361,24 @@ const prettify = input => {
   let result = input.replace(/<[^>]*>/g, '');
 
   // Преобразовать Jira wiki в Markdown
-  // Жирный текст: *text* -> **text**
-  result = result.replace(/\*([^*]+)\*/g, '**$1**');
+  // Маркеры списков: *, **, - и т.д. -> Unicode bullets (● для 1-го уровня, ⚬ для 2-го) с восемью пробелами для вложенности
+  result = result.replace(/(^|\n)([ \t]*)([-*]+)(\s+)/g, (match, prefix, indent, marker) => {
+    if (!marker) {
+      return match;
+    }
+    const firstChar = marker[0];
+    if (firstChar !== '*' && firstChar !== '-') {
+      return match;
+    }
+    const depth = firstChar === '*' ? marker.length : 1;
+    if (depth === 1) {
+      return `${prefix}${indent}● `;
+    }
+    const indentSpaces = ' '.repeat(8);
+    return `${prefix}${indent}${indentSpaces}⚬ `;
+  });
+  // Жирный текст: *text* -> **text** (игнорируем одиночные * перед пробелом)
+  result = result.replace(/\*(\S[^*]*\S)\*/g, (match, boldText) => `**${boldText}**`);
   // Курсив: _text_ -> *text* (но избегать в URL)
   // Сначала временно заменить URL
   const urlPlaceholder = '###URL_PLACEHOLDER###';
@@ -26,35 +387,343 @@ const prettify = input => {
     urls.push(match);
     return urlPlaceholder;
   });
-  result = result.replace(/_([^_]+)_/g, '*$1*');
+  result = result.replace(/_([^_]+)_/g, (match, italicText) => `*${italicText}*`);
   // Восстановить URL
   urls.forEach(url => {
     result = result.replace(urlPlaceholder, url);
   });
 
   // Код: {{text}} -> `text`
-  result = result.replace(/\{\{([^}]+)\}\}/g, '`$1`');
+  result = result.replace(/\{\{([^}]+)\}\}/g, (match, inlineCode) => '`' + inlineCode + '`');
   // Ссылки: [text|url] -> [text](url)
-  result = result.replace(/\[([^\|]+)\|([^\]]+)\]/g, '[$1]($2)');
+  result = result.replace(/\[([^\|]+)\|([^\]]+)\]/g, (match, label, url) => `[${label}](${url})`);
+  // Ссылки вида [https://...] — весь текст внутри [] превращаем в ссылку на базовый URL без параметров
+  result = result.replace(/\[(https?:\/\/[^\]\s]+)\]/g, (match, rawUrl) => {
+    const baseUrl = stripUrlParams(rawUrl) || rawUrl;
+    const displayText = decodeUriComponentSafe(baseUrl);
+    return `[${displayText}](${rawUrl})`;
+  });
+  // Одинарные # в начале строки часто используются как маркеры списков — приводим к "- "
+  result = result.replace(/(^|\n)\s*#(?!#)\s+/g, (match, prefix) => `${prefix}- `);
   // Заголовки: h1. text -> # text
   result = result.replace(/^h(\d+)\.\s*(.+)$/gm, (match, level, text) => '#'.repeat(parseInt(level)) + ' ' + text);
   // Изображения: !image.png|alt! -> ![alt](image.png)
-  result = result.replace(/!([^|!]+)(\|([^!]+))?!/g, '![$3]($1)');
+  result = result.replace(/!([^|!]+)(\|([^!]+))?!/g, (match, path, _withAlt, altText) => `![${altText || ''}](${path})`);
   // Блоки кода: {code:lang} ... {code} -> ```lang ... ```
   result = result.replace(/\{code(?::(\w+))?\}([\s\S]*?)\{code\}/g, (match, lang, code) => {
     return '```' + (lang || '') + '\n' + code.trim() + '\n```';
   });
   // Упоминания пользователей: [~username] -> @username
-  result = result.replace(/\[~([^\]]+)\]/g, '@$1');
+  result = result.replace(/\[~([^\]]+)\]/g, (match, username) => `@${username}`);
+  // Удалить доменную часть в упоминаниях вида @user@domain -> @user, не затрагивая обычные email
+  result = result.replace(/(^|[\s(>\-])@([A-Za-z0-9._-]+)@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, (match, prefix, username) => `${prefix}@${username}`);
   // Email: [mailto:email] -> email
-  result = result.replace(/\[mailto:([^\]]+)\]/g, '$1');
+  result = result.replace(/\[mailto:([^\]]+)\]/g, (match, email) => email);
+  // Jira жирный текст в виде {**}text{**}
+  result = result.replace(/\{\*\*\}([\s\S]*?)\{\*\*\}/g, (match, inner) => `**${inner.trim()}**`);
+  result = result.replace(/\{\*\*\}/g, '**');
+  // Убрать лишние ** вокруг изображений
+  result = result.replace(/\*\*(\!\[[^\]]*\]\([^\)]+\))\*\*/g, (match, imageMarkdown) => imageMarkdown);
 
-  // Очистить лишние пробелы
-  result = result.replace(/\s+/g, ' ').trim();
+  // Нормализовать переводы строк и убрать избыточные пробелы
+  result = result
+    .replace(/\r\n?/g, '\n')
+    .replace(/\t+/g, ' ')
+    .replace(/ {2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
   // Удалить кавычки вокруг текста
   result = result.replace(/^"|"$/g, '');
 
   return result;
+};
+
+// Делит текст на последовательность обычных сегментов и блоков кода {code[:lang]}...{code}
+const splitContentByCodeBlocks = (input, initialLanguage = null) => {
+  if (!input || typeof input !== 'string') {
+    return { segments: [], danglingLanguage: initialLanguage };
+  }
+  const tokenRegex = /\{code(?::([^}]+))?\}/gi;
+  const segments = [];
+  let mode = initialLanguage ? 'code' : 'text';
+  let activeLanguage = initialLanguage || null;
+  let lastIndex = 0;
+  let match;
+  const pushSegment = (type, text) => {
+    if (!text) return;
+    segments.push({ type, language: type === 'code' ? activeLanguage : null, value: text });
+  };
+  while ((match = tokenRegex.exec(input)) !== null) {
+    const chunk = input.slice(lastIndex, match.index);
+    if (chunk) {
+      pushSegment(mode === 'code' ? 'code' : 'text', chunk);
+    }
+    const hasLang = Boolean(match[1]);
+    if (hasLang || mode === 'text') {
+      mode = 'code';
+      activeLanguage = match[1]?.trim() || null;
+    } else {
+      mode = 'text';
+      activeLanguage = null;
+    }
+    lastIndex = match.index + match[0].length;
+  }
+  const tail = input.slice(lastIndex);
+  if (tail) {
+    pushSegment(mode === 'code' ? 'code' : 'text', tail);
+  }
+  return { segments, danglingLanguage: mode === 'code' ? activeLanguage : null };
+};
+
+const formatErrorPreview = (value, limit = 400) => {
+  if (value === null || value === undefined) {
+    return '<empty>';
+  }
+  const str = String(value).replace(/\s+/g, ' ').trim();
+  if (!str.length) return '<whitespace>';
+  if (str.length <= limit) return str;
+  return str.slice(0, limit) + '…';
+};
+
+const raiseFormattingError = (stage, error, rawText) => {
+  const message = error && error.message ? error.message : String(error);
+  throw new Error(`[${stage}] ${message}. Raw excerpt: ${formatErrorPreview(rawText)}`);
+};
+
+const containsMarkdownTable = paragraph => {
+  if (!paragraph) return false;
+  const lines = paragraph.split(/\r?\n/);
+  let tableLines = 0;
+  lines.forEach(line => {
+    const trimmed = line.replace(/\u00A0/g, ' ').trim();
+    if (trimmed.startsWith('|') && trimmed.indexOf('|', 1) !== -1) {
+      tableLines++;
+    }
+  });
+  return tableLines >= 2;
+};
+
+// Определяет, напоминает ли параграф многострочный блок кода (JSON/GraphQL/HTTP и т.п.)
+const looksLikeCodeParagraph = paragraph => {
+  if (!paragraph) return false;
+  if (containsMarkdownTable(paragraph)) {
+    return false;
+  }
+  const normalized = paragraph
+    .replace(/\u00A0/g, ' ')
+    .replace(/\r\n?/g, '\n');
+  const lines = normalized.split('\n').filter(line => line.trim().length);
+  if (lines.length < 2) {
+    return false;
+  }
+  let codeLines = 0;
+  lines.forEach(line => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    if (/^\{color/i.test(trimmed) || /\{color\}$/i.test(trimmed)) {
+      return;
+    }
+    if (/^[{}\[\]()]/.test(trimmed)) {
+      codeLines++;
+      return;
+    }
+    if (/^\s{2,}/.test(line) || /^\t+/.test(line)) {
+      codeLines++;
+      return;
+    }
+    if (/[:=]/.test(trimmed) && /[A-Za-z0-9"']/.test(trimmed)) {
+      codeLines++;
+      return;
+    }
+    if (/^".+":/.test(trimmed)) {
+      codeLines++;
+      return;
+    }
+    if (trimmed.includes('->') || trimmed.includes('=>')) {
+      codeLines++;
+      return;
+    }
+    if (/^\w+\s*\(.*\)\s*\{?/.test(trimmed)) {
+      codeLines++;
+      return;
+    }
+    if (/^(GET|POST|PUT|DELETE|PATCH)\s+/i.test(trimmed)) {
+      codeLines++;
+      return;
+    }
+    if (/^###URL/.test(trimmed)) {
+      codeLines++;
+      return;
+    }
+  });
+  if (codeLines / lines.length >= 0.6) {
+    return true;
+  }
+  const braceCount = (normalized.match(/[{}\[\]]/g) || []).length;
+  if (braceCount >= 4 && lines.length >= 3) {
+    return true;
+  }
+  const jsonPairs = (normalized.match(/"[^"\n]+"\s*:/g) || []).length;
+  if (jsonPairs >= 3) {
+    return true;
+  }
+  const sqlKeywords = normalized.match(/\b(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE|GROUP\s+BY|ORDER\s+BY|HAVING|JOIN|WITH|CREATE|ALTER|DROP|TRUNCATE|DESCRIBE|EXPLAIN|SHOW|OPTIMIZE|ATTACH|DETACH|GRANT|REVOKE|EXISTS|USE|SET|FORMAT|ENGINE|MATERIALIZED|CLUSTER)\b/gi) || [];
+  if (sqlKeywords.length >= 4) {
+    return true;
+  }
+  if (sqlKeywords.length >= 2 && lines.length >= 3) {
+    return true;
+  }
+  return false;
+};
+
+// Пытается определить язык блока кода для подсказки в CodeBlock
+const inferCodeLanguage = snippet => {
+  const trimmed = (snippet || '').trim();
+  if (!trimmed) return null;
+  if (/^\s*\{[\s\S]*\}/.test(trimmed) && /"[^"\n]+"\s*:/.test(trimmed)) {
+    return 'json';
+  }
+  if (/(?:\bquery\b|\bmutation\b|\bsubscription\b)/i.test(trimmed)) {
+    return 'graphql';
+  }
+  if (/^\s*(server|agent|employee)\s*\{/i.test(trimmed) && !/"[^"\n]+"\s*:/.test(trimmed)) {
+    return 'graphql';
+  }
+  if (/^\s*(GET|POST|PUT|DELETE|PATCH)\s+/i.test(trimmed)) {
+    return 'http';
+  }
+  if (/^\s*(SELECT|INSERT|UPDATE|DELETE)\b/i.test(trimmed)) {
+    return 'sql';
+  }
+  if (/^\s*(CREATE|ALTER|DROP|TRUNCATE|DESCRIBE|EXPLAIN|SHOW|OPTIMIZE|ATTACH|DETACH|GRANT|REVOKE|EXISTS|USE)\b/i.test(trimmed)) {
+    return 'sql';
+  }
+  if (/(?:\bSELECT\b|\bINSERT\b|\bUPDATE\b|\bDELETE\b|\bCREATE\b|\bALTER\b|\bDROP\b|\bTRUNCATE\b|\bDESCRIBE\b|\bEXPLAIN\b|\bSHOW\b|\bOPTIMIZE\b)/i.test(trimmed)
+    && /(\bFROM\b|\bWHERE\b|\bJOIN\b|\bVALUES\b|\bSET\b|\bTABLE\b|\bVIEW\b|\bENGINE\b|\bFORMAT\b|\bDATABASE\b|\bCLUSTER\b|\bSETTINGS\b)/i.test(trimmed)) {
+    return 'sql';
+  }
+  if (/ENGINE\s*=/i.test(trimmed) || /FORMAT\s+JSON/i.test(trimmed) || /SETTINGS\s+/i.test(trimmed)) {
+    return 'sql';
+  }
+  if (/function\s+|=>/.test(trimmed)) {
+    return 'javascript';
+  }
+  return null;
+};
+
+// Делит текстовый сегмент на параграфы и автоматически помечает кодоподобные блоки
+const splitTextSegmentByHeuristics = text => {
+  if (!text) return [];
+  const sanitized = text.replace(/\u00A0/g, ' ');
+  const normalized = sanitized.replace(/\r\n?/g, '\n');
+  const withQuoteBreaks = normalized.replace(/\s*\{quote\}\s*/gi, '\n\n');
+  const sqlBreakPattern = /([^\n])\n(\s*(?:SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|DESCRIBE|EXPLAIN|SHOW|OPTIMIZE|ATTACH|DETACH|GRANT|REVOKE|EXISTS|WITH|USE)\b)/gi;
+  const withSqlBreaks = withQuoteBreaks.replace(sqlBreakPattern, (match, before, statement) => `${before}\n\n${statement}`);
+  const paragraphs = withSqlBreaks.split(/\n{2,}/);
+  const result = [];
+  paragraphs.forEach(paragraph => {
+    if (!paragraph || !paragraph.trim()) {
+      return;
+    }
+    if (looksLikeCodeParagraph(paragraph)) {
+      result.push({ type: 'code', value: paragraph });
+    } else {
+      const tableAwareSegments = splitTextByTables(paragraph);
+      if (tableAwareSegments) {
+        tableAwareSegments.forEach(segment => {
+          if (segment.type === 'table') {
+            result.push({ type: 'table', value: segment.value });
+          } else if (segment.type === 'text' && segment.value.trim()) {
+            result.push({ type: 'text', value: segment.value });
+          }
+        });
+      } else {
+        result.push({ type: 'text', value: paragraph });
+      }
+    }
+  });
+  return result;
+};
+
+// Преобразует сегменты текста/кода в элементы Adaptive Card (RichTextBlock и CodeBlock)
+const buildAdaptiveContentElements = (input, initialLanguage = null) => {
+  let splitResult;
+  try {
+    splitResult = splitContentByCodeBlocks(input, initialLanguage);
+  } catch (error) {
+    raiseFormattingError('splitContentByCodeBlocks', error, input);
+  }
+  const { segments, danglingLanguage } = splitResult;
+  const elements = [];
+  segments.forEach(segment => {
+    if (segment.type === 'code') {
+      const snippet = typeof segment.value === 'string'
+        ? segment.value.replace(/\s+$/g, '')
+        : segment.value;
+      if (!snippet) {
+        return;
+      }
+      const codeElement = {
+        type: 'CodeBlock',
+        codeSnippet: snippet
+      };
+      if (segment.language) {
+        codeElement.language = segment.language;
+      }
+      if (elements.length) codeElement.spacing = 'Small';
+      elements.push(codeElement);
+    } else {
+      let textPieces;
+      try {
+        textPieces = splitTextSegmentByHeuristics(segment.value);
+      } catch (error) {
+        raiseFormattingError('splitTextSegmentByHeuristics', error, segment.value);
+      }
+      const queue = textPieces.length ? textPieces : [{ type: 'text', value: segment.value }];
+      queue.forEach(piece => {
+        if (piece.type === 'code') {
+          const snippet = typeof piece.value === 'string'
+            ? piece.value.replace(/\u00A0/g, ' ').replace(/^\s*\n+/, '').replace(/\s+$/g, '')
+            : piece.value;
+          if (!snippet) return;
+          const codeElement = {
+            type: 'CodeBlock',
+            codeSnippet: snippet
+          };
+          const detectedLanguage = inferCodeLanguage(snippet);
+          if (detectedLanguage) {
+            codeElement.language = detectedLanguage;
+          }
+          if (elements.length) codeElement.spacing = 'Small';
+          elements.push(codeElement);
+        } else if (piece.type === 'table') {
+          const tableElement = buildAdaptiveTableElement(piece.value, elements.length);
+          if (tableElement) {
+            elements.push(tableElement);
+          }
+        } else {
+          const formatted = prettify(piece.value);
+          const trimmedText = formatted ? formatted.trim() : '';
+          if (trimmedText && trimmedText !== '.') {
+            const textElement = {
+              type: 'RichTextBlock',
+              inlines: buildRichTextInlines(formatted)
+            };
+            if (elements.length) textElement.spacing = 'Small';
+            elements.push(textElement);
+          }
+        }
+      });
+    }
+  });
+  if (!elements.length) {
+    elements.push({
+      type: 'RichTextBlock',
+      inlines: [{ type: 'TextRun', text: '-', wrap: true }]
+    });
+  }
+  return { elements, danglingLanguage };
 };
 
 //  Извлекает общие данные из bundle и input, включая URL вебхука, базовый URL Jira, список email-адресов, уникальный ID отправки, время отправки и стартовое время для замера длительности.
@@ -91,7 +760,7 @@ const buildContextBlock = (input, contextUrl, issueType) => {
   const label = issueType === "subtask" ? "Родительская задача: " : "Эпик: ";
   return {
     type: "RichTextBlock",
-    inlines: [
+    inlines: highlightMentionsInInlines([
       { type: "TextRun", text: label, weight: "Bolder" },
       {
         type: "TextRun",
@@ -99,7 +768,7 @@ const buildContextBlock = (input, contextUrl, issueType) => {
         color: "Accent",
         selectAction: { type: "Action.OpenUrl", url: contextUrl }
       }
-    ]
+    ])
   };
 };
 
@@ -263,9 +932,9 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
         items: [
           {
             type: "RichTextBlock",
-            inlines: [
+            inlines: highlightMentionsInInlines([
               { type: "TextRun", text: `${safe(input.comment_body)}`, wrap: true }
-            ]
+            ])
           }
         ],
         style: "emphasis",
@@ -273,65 +942,68 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
       }
     ];
   } else if (blockType === 'comment') {
-    if (input.separated_comment_part && input.separated_comment_part.trim() !== '') {
-      specificParts = [
-        {
-          type: "TextBlock",
-          text: `**${safe(input.comment_author)}** пишет:`,
-          wrap: true,
-          spacing: "Small"
-        },
-        {
-          type: "TextBlock",
-          text: safe(input.original_comment),
-          wrap: true,
-          spacing: "None"
-        },
-        {
-          type: "ActionSet",
-          id: "showMore",
-          actions: [
-            {
-              type: "Action.ToggleVisibility",
-              title: "Показать полностью",
-              targetElements: ["fullComment", "showMore", "showLess"],
-              mode: "secondary"
-            }
-          ]
-        },
-        {
-          type: "ActionSet",
-          id: "showLess",
-          isVisible: false,
-          actions: [
-            {
-              type: "Action.ToggleVisibility",
-              title: "Скрыть",
-              targetElements: ["fullComment", "showMore", "showLess"]
-            }
-          ]
-        },
-        {
-          type: "Container",
-          id: "fullComment",
-          isVisible: false,
-          style: "emphasis",
-          spacing: "None",
-          items: [
-            {
-              type: "RichTextBlock",
-              inlines: [
-                {
-                  type: "TextRun",
-                  text: prettify(input.separated_comment_part),
-                  wrap: true
-                }
-              ]
-            }
-          ]
-        }
-      ];
+    const separatedRaw = input.separated_comment_part || '';
+    const hasSeparatedPart = separatedRaw.trim() !== '';
+    if (hasSeparatedPart) {
+      const stitchedChunks = healSplitCommentChunks(input.original_comment || '', separatedRaw);
+      const shortContent = buildAdaptiveContentElements(stitchedChunks.headChunk || '');
+      const hasLongRemainder = stitchedChunks.tailChunk && stitchedChunks.tailChunk.trim() !== '';
+      if (hasLongRemainder) {
+        const longContent = buildAdaptiveContentElements(stitchedChunks.tailChunk, shortContent.danglingLanguage);
+        specificParts = [
+          {
+            type: "TextBlock",
+            text: `**${safe(input.comment_author)}** пишет:`,
+            wrap: true,
+            spacing: "Small"
+          },
+          ...shortContent.elements,
+          {
+            type: "ActionSet",
+            id: "showMore",
+            actions: [
+              {
+                type: "Action.ToggleVisibility",
+                title: "Показать полностью",
+                targetElements: ["fullComment", "showMore", "showLess"],
+                mode: "secondary"
+              }
+            ]
+          },
+          {
+            type: "ActionSet",
+            id: "showLess",
+            isVisible: false,
+            actions: [
+              {
+                type: "Action.ToggleVisibility",
+                title: "Скрыть",
+                targetElements: ["fullComment", "showMore", "showLess"]
+              }
+            ]
+          },
+          {
+            type: "Container",
+            id: "fullComment",
+            isVisible: false,
+            style: "emphasis",
+            spacing: "None",
+            items: longContent.elements
+          }
+        ];
+      } else {
+        specificParts = [
+          {
+            type: "TextBlock",
+            text: `**${safe(input.comment_author)}** пишет:`,
+            wrap: true,
+            spacing: "Small"
+          },
+          ...shortContent.elements
+        ];
+      }
     } else {
+      const fullContent = buildAdaptiveContentElements(input.comment_body || '');
       specificParts = [
         {
           type: "TextBlock",
@@ -341,14 +1013,7 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
         },
         {
           type: "Container",
-          items: [
-            {
-              type: "RichTextBlock",
-              inlines: [
-                { type: "TextRun", text: `${prettify(input.comment_body)}`, wrap: true }
-              ]
-            }
-          ],
+          items: fullContent.elements,
           style: "emphasis",
           spacing: "None"
         }
@@ -367,7 +1032,7 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
         items: [
           {
             type: "RichTextBlock",
-            inlines: [
+            inlines: highlightMentionsInInlines([
               {
                 type: "TextRun",
                 text: `${safe(input.from_status)} `,
@@ -380,7 +1045,7 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
                 weight: "Bolder",
                 size: "Medium"
               }
-            ]
+            ])
           }
         ],
         style: "emphasis",
@@ -541,12 +1206,12 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
           items: [
             {
               type: "RichTextBlock",
-              inlines: [
+              inlines: highlightMentionsInInlines([
                 {
                   type: "TextRun",
                   text: `${prettify(input.issue_description)}`
                 }
-              ]
+              ])
             }
           ],
           style: "emphasis",
@@ -893,8 +1558,8 @@ const extractCardNames = (raw) => {
 
 app = {
   schema: 2,
-  version: '1.5.0',
-  label: 'Jira → Teams Уведомления',
+  version: '0.0.9',
+  label: 'Jira → Teams Уведомления, экспериментальная версия',
   description: 'Интеллектуальные уведомления о событиях Jira в Microsoft Teams. Автоматически адаптируется под тип задачи (эпик, задача, подзадача) и роль получателя',
   blocks: {
     NewComment: {
