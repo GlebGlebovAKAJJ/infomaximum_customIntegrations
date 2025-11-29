@@ -21,6 +21,179 @@ const decodeUriComponentSafe = value => {
   }
 };
 
+const coalesceInputValue = (input, candidateKeys = []) => {
+  if (!input || typeof input !== "object") {
+    return undefined;
+  }
+  for (const key of candidateKeys) {
+    if (!key) continue;
+    if (!Object.prototype.hasOwnProperty.call(input, key)) continue;
+    const value = input[key];
+    if (typeof value === "string") {
+      if (value.trim().length === 0) {
+        continue;
+      }
+      return value;
+    }
+    if (Array.isArray(value)) {
+      if (!value.length) {
+        continue;
+      }
+      return value;
+    }
+    if (value !== undefined && value !== null) {
+      return value;
+    }
+  }
+  return undefined;
+};
+
+const parseJsonLoose = raw => {
+  if (raw === undefined || raw === null) {
+    return null;
+  }
+  if (typeof raw === "object") {
+    return raw;
+  }
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch (error) {
+    const looksJson = (trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"));
+    if (looksJson) {
+      try {
+        return JSON.parse(trimmed.replace(/'/g, '"'));
+      } catch (secondaryError) {
+        return null;
+      }
+    }
+  }
+  return null;
+};
+
+const parseArrayValues = raw => {
+  if (Array.isArray(raw)) {
+    return raw.map(item => String(item).trim()).filter(Boolean);
+  }
+  if (raw === undefined || raw === null) {
+    return [];
+  }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return [];
+    }
+    const parsed = parseJsonLoose(trimmed);
+    if (Array.isArray(parsed)) {
+      return parsed.map(item => String(item).trim()).filter(Boolean);
+    }
+    const normalized = trimmed.replace(/^\[|\]$/g, "");
+    return normalized
+      .split(/[,;|]/)
+      .map(item => item.replace(/^['"]+|['"]+$/g, "").trim())
+      .filter(Boolean);
+  }
+  return [String(raw).trim()].filter(Boolean);
+};
+
+const isSelectAllToken = value => {
+  if (value === undefined || value === null) {
+    return false;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  return normalized === "выбрать все" || normalized === "select all" || normalized === "all" || normalized === "*";
+};
+
+const formatIssuesList = issues => {
+  const items = Array.isArray(issues) ? issues.map(item => String(item).trim()).filter(Boolean) : [];
+  if (!items.length || items.some(isSelectAllToken)) {
+    return "все задачи";
+  }
+  return items.map(issue => safe(issue)).join(", ");
+};
+
+const normalizeParameterizedEntry = (project, issues) => {
+  const normalizedProject = typeof project === "string" ? project.trim() : (project ?? "");
+  const normalizedIssues = Array.isArray(issues) ? issues.filter(Boolean) : [];
+  if (!normalizedProject && !normalizedIssues.length) {
+    return null;
+  }
+  return { project: normalizedProject, issues: normalizedIssues };
+};
+
+const collectParameterizedEntries = input => {
+  const buckets = { initial: [], addition: [], removal: [] };
+
+  const baseProject = coalesceInputValue(input, ["project", "project_name"]);
+  const baseIssues = parseArrayValues(coalesceInputValue(input, ["issues", "issues[]", "issue_types"]));
+  const baseEntry = normalizeParameterizedEntry(baseProject, baseIssues);
+  if (baseEntry) {
+    buckets.initial.push(baseEntry);
+  }
+
+  const additionProject = coalesceInputValue(input, ["project_to_add", "project_to_subscribe"]);
+  const additionIssues = parseArrayValues(coalesceInputValue(input, ["issues_to_add", "issues_to_add[]"]));
+  const additionEntry = normalizeParameterizedEntry(additionProject, additionIssues);
+  if (additionEntry) {
+    buckets.addition.push(additionEntry);
+  }
+
+  const deletionProject = coalesceInputValue(input, ["project_to_delete", "project_to_remove"]);
+  const deletionIssues = parseArrayValues(coalesceInputValue(input, ["issues_to_delete", "issues_to_delete[]", "issue_types_to_delete"]));
+  const deletionEntry = normalizeParameterizedEntry(deletionProject, deletionIssues);
+  if (deletionEntry) {
+    buckets.removal.push(deletionEntry);
+  }
+
+  let mode = "none";
+  let entries = [];
+  if (buckets.initial.length) {
+    mode = "initial";
+    entries = buckets.initial;
+  } else if (buckets.addition.length) {
+    mode = "addition";
+    entries = buckets.addition;
+  } else if (buckets.removal.length) {
+    mode = "removal";
+    entries = buckets.removal;
+  }
+
+  return { mode, entries };
+};
+
+const formatParameterizedEntry = entry => {
+  if (!entry) {
+    return null;
+  }
+  const project = entry.project ? `**${safe(entry.project)}**` : "**проект не указан**";
+  const issuesText = formatIssuesList(entry.issues);
+  return `${project}:  ${issuesText}`;
+};
+
+const buildParameterizedLines = (entries, mode) => {
+  if (!Array.isArray(entries) || !entries.length) {
+    return [];
+  }
+  return entries
+    .map((entry, index) => {
+      const formatted = formatParameterizedEntry(entry);
+      if (!formatted) {
+        return null;
+      }
+      if (mode === "initial" && index === 0) {
+        return `*Параметры:* ${formatted}`;
+      }
+      return formatted;
+    })
+    .filter(Boolean);
+};
+
 const stripUrlParams = value => {
   if (typeof value !== 'string' || !value.length) {
     return value;
@@ -118,69 +291,6 @@ const highlightMentionsInInlines = inlines => {
     }
   });
   return result;
-};
-
-const buildRichTextInlines = text => {
-  const content = typeof text === 'string' ? text : '';
-  if (!content.length) {
-    return [{ type: 'TextRun', text: '', wrap: true }];
-  }
-  const inlines = [];
-  const linkRegex = /(!?)\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
-  let lastIndex = 0;
-  let match;
-  while ((match = linkRegex.exec(content)) !== null) {
-    const [fullMatch, bang, label, url] = match;
-    if (match.index > lastIndex) {
-      appendFormattedTextRuns(inlines, content.slice(lastIndex, match.index));
-    }
-    if (bang === '!') {
-      appendFormattedTextRuns(inlines, fullMatch);
-      lastIndex = match.index + fullMatch.length;
-      continue;
-    }
-    appendFormattedTextRuns(inlines, label, { color: 'Accent', selectAction: { type: 'Action.OpenUrl', url } });
-    lastIndex = match.index + fullMatch.length;
-  }
-  appendFormattedTextRuns(inlines, content.slice(lastIndex));
-  if (!inlines.length) {
-    inlines.push({ type: 'TextRun', text: content, wrap: true });
-  }
-  return highlightMentionsInInlines(inlines);
-};
-
-const splitRowStringIntoCells = rowString => {
-  const sanitized = (rowString || '').replace(/\r/g, '').trim();
-  if (!sanitized.length) return [];
-  let working = sanitized;
-  if (working.startsWith('|')) working = working.slice(1);
-  if (working.endsWith('|')) working = working.slice(0, -1);
-  const cells = [];
-  let current = '';
-  let bracketDepth = 0;
-  for (let i = 0; i < working.length; i++) {
-    const char = working[i];
-    if (char === '[') bracketDepth++;
-    else if (char === ']') bracketDepth = Math.max(0, bracketDepth - 1);
-    if (char === '|' && bracketDepth === 0) {
-      cells.push(current.trim());
-      current = '';
-    } else {
-      current += char;
-    }
-  }
-  cells.push(current.trim());
-  return cells;
-};
-
-const buildTableModel = rowStrings => {
-  if (!rowStrings || !rowStrings.length) return null;
-  const parsedRows = rowStrings.map(splitRowStringIntoCells).filter(row => row.length);
-  const columnCount = parsedRows.reduce((max, row) => Math.max(max, row.length), 0);
-  if (!columnCount || parsedRows.length < 2) {
-    return null;
-  }
-  return { rows: parsedRows, columnCount };
 };
 
 const buildAdaptiveTableElement = (tableModel, hasPreviousElements) => {
@@ -1353,20 +1463,46 @@ const executeSystemBlock = (service, style, badgeText, mainText, greetingText, b
       {
         type: "TextBlock",
         text: bodyText,
-        wrap: true,
-        isSubtle: true
+        wrap: true
       },
-      ...(listBlock ? [
-        {
-          type: "Container",
-          items: listBlock.items.map(item => ({
-            type: "TextBlock",
-            text: `• ${item}`,
-            wrap: true,
-            spacing: "None"
-          }))
+      ...((() => {
+        if (!listBlock) {
+          return [];
         }
-      ] : []),
+        const sections = Array.isArray(listBlock) ? listBlock : [listBlock];
+        return sections
+          .map(section => ({
+            title: typeof section?.title === "string" ? section.title : "",
+            items: Array.isArray(section?.items) ? section.items.filter(Boolean) : [],
+            bullets: section && Object.prototype.hasOwnProperty.call(section, "bullets") ? section.bullets !== false : true,
+            spacing: typeof section?.spacing === "string" ? section.spacing : null
+          }))
+          .filter(section => section.items.length)
+          .flatMap(section => {
+            const titleBlock = section.title
+              ? [{
+                type: "TextBlock",
+                text: section.title,
+                wrap: true,
+                weight: "Bolder",
+                spacing: "Medium"
+              }]
+              : [];
+            return [
+              ...titleBlock,
+              {
+                type: "Container",
+                spacing: section.spacing || (section.title ? "Small" : "None"),
+                items: section.items.map(item => ({
+                  type: "TextBlock",
+                  text: section.bullets ? `• ${item}` : item,
+                  wrap: true,
+                  spacing: "None"
+                }))
+              }
+            ];
+          });
+      })()),
       {
         type: "FactSet",
         facts: facts
@@ -1758,6 +1894,8 @@ app = {
         { key: "started_at", label: "Дата подключения", type: "text", hint: "started_at", required: true },
         { key: "change_source", label: "Кто инициировал изменение", type: "text", hint: "change_source (admin или user)", required: false },
         { key: "change_scope", label: "Что изменилось", type: "text", hint: "change_scope (global, types, both)", required: false },
+        { key: "project_to_add", label: "Проект (добавление)", type: "text", hint: "project_to_add", required: false },
+        { key: "issues_to_add", label: "Задачи (добавление)", type: "text", hint: "issues_to_add (типы через ';' или ',')", required: false },
         { key: "card_uuid", label: "UUID адаптивной карточки", type: "text", hint: "card_uuid", required: true }
       ],
 
@@ -1769,7 +1907,10 @@ app = {
         const allowedScopes = new Set(["global", "types", "both"]);
         const changeScope = allowedScopes.has(scopeRaw) ? scopeRaw : "both";
         const includeTypeList = changeScope === "types" || changeScope === "both";
-        const cardNamesArray = includeTypeList ? extractCardNames(input.card_names).map(name => safe(name)) : [];
+        const rawCardNames = extractCardNames(input.card_names).map(name => safe(name));
+        const cardNamesArray = includeTypeList ? rawCardNames : [];
+        const primaryNotificationName = rawCardNames[0] || safe(input.event_type_name || input.subscription_name || "уведомлению");
+        const startedAtValue = safe(input.started_at || input.start_time || input.activated_at);
         bundle.inputData.target_emails = input.email; // Установить targetEmails как email пользователя
         const activationCopy = isAdminChange
           ? {
@@ -1812,6 +1953,28 @@ app = {
                 };
             }
           })();
+        const parameterizedData = collectParameterizedEntries(input);
+        const parameterLines = buildParameterizedLines(parameterizedData.entries, parameterizedData.mode);
+        switch (parameterizedData.mode) {
+          case "addition":
+            activationCopy.bodyText = `Ты добавил следующие **параметры** к уведомлению **${primaryNotificationName}**:`;
+            break;
+          case "removal":
+            activationCopy.bodyText = `Ты убрал следующие **параметры** к уведомлению **${primaryNotificationName}**:`;
+            break;
+          case "initial":
+          default:
+            break;
+        }
+        const listSections = [];
+        if (parameterizedData.mode === "initial" && rawCardNames.length) {
+          listSections.push({ title: "", items: rawCardNames.map(name => `*${name}*`), bullets: false });
+        } else if (activationCopy.includeList && cardNamesArray.length && parameterizedData.mode === "none") {
+          listSections.push({ title: "", items: cardNamesArray });
+        }
+        if (parameterLines.length) {
+          listSections.push({ title: "", items: parameterLines, bullets: false, spacing: "Default" });
+        }
         return executeSystemBlock(
           service,
           activationCopy.style,
@@ -1820,11 +1983,11 @@ app = {
           activationCopy.greetingText,
           activationCopy.bodyText,
           [
-            { title: "Дата подключения:", value: safe(input.started_at) }
+            { title: "Дата подключения:", value: startedAtValue }
           ],
           "Перейти в отчёт",
           bundle,
-          activationCopy.includeList ? { title: "", items: cardNamesArray } : null
+          listSections.length ? listSections : null
         );
       }
     },
@@ -1839,6 +2002,8 @@ app = {
         { key: "deactivated_at", label: "Дата отключения", type: "text", hint: "deactivated_at", required: true },
         { key: "change_source", label: "Кто инициировал изменение", type: "text", hint: "change_source (admin или user)", required: false },
         { key: "change_scope", label: "Что изменилось", type: "text", hint: "change_scope (global, types, both)", required: false },
+        { key: "project_to_delete", label: "Проект (удаление)", type: "text", hint: "project_to_delete", required: false },
+        { key: "issues_to_delete", label: "Задачи (удаление)", type: "text", hint: "issues_to_delete (типы через ';' или ',')", required: false },
         { key: "card_uuid", label: "UUID адаптивной карточки", type: "text", hint: "card_uuid", required: true }
       ],
 
@@ -1850,7 +2015,10 @@ app = {
         const allowedScopes = new Set(["global", "types", "both"]);
         const changeScope = allowedScopes.has(scopeRaw) ? scopeRaw : "both";
         const includeTypeList = changeScope === "types" || changeScope === "both";
-        const cardNamesArray = includeTypeList ? extractCardNames(input.card_names).map(name => safe(name)) : [];
+        const rawCardNames = extractCardNames(input.card_names).map(name => safe(name));
+        const cardNamesArray = includeTypeList ? rawCardNames : [];
+        const primaryNotificationName = rawCardNames[0] || safe(input.event_type_name || input.subscription_name || "уведомлению");
+        const deactivatedAtValue = safe(input.deactivated_at || input.start_time || input.disabled_at);
         bundle.inputData.target_emails = input.email; // Установить targetEmails как email пользователя
         const deactivationCopy = isAdminChange
           ? {
@@ -1893,6 +2061,22 @@ app = {
                 };
             }
           })();
+        const parameterizedData = collectParameterizedEntries(input);
+        const parameterLines = buildParameterizedLines(parameterizedData.entries, parameterizedData.mode);
+        if (parameterizedData.mode === "removal") {
+          deactivationCopy.bodyText = `Ты убрал следующие **параметры** к уведомлению **${primaryNotificationName}**`;
+        } else if (parameterizedData.mode === "addition") {
+          deactivationCopy.bodyText = `Ты добавил следующие **параметры** к уведомлению **${primaryNotificationName}**`;
+        }
+        const listSections = [];
+        if (parameterizedData.mode === "initial" && rawCardNames.length) {
+          listSections.push({ title: "", items: rawCardNames.map(name => `*${name}*`), bullets: false });
+        } else if (deactivationCopy.includeList && cardNamesArray.length && parameterizedData.mode === "none") {
+          listSections.push({ title: "", items: cardNamesArray });
+        }
+        if (parameterLines.length) {
+          listSections.push({ title: "", items: parameterLines, bullets: false, spacing: "Default" });
+        }
         return executeSystemBlock(
           service,
           deactivationCopy.style,
@@ -1901,11 +2085,11 @@ app = {
           deactivationCopy.greetingText,
           deactivationCopy.bodyText,
           [
-            { title: "Дата отключения:", value: safe(input.deactivated_at) }
+            { title: "Дата отключения:", value: deactivatedAtValue }
           ],
           null,
           bundle,
-          deactivationCopy.includeList ? { title: "", items: cardNamesArray } : null
+          listSections.length ? listSections : null
         );
       }
     }

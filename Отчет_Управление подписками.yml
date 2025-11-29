@@ -1,0 +1,966 @@
+schema: 6
+metadata:
+  autoUpdate:
+    enabled: true
+    minutes: 3
+  color:
+    mode: BASE
+    value: "#edf4fd"
+  spacing: false
+  cornerRadius: 10
+  dividersHeight:
+    mode: FIXED
+    value: 18
+  maxWidth: 920
+widgetsSetting:
+  titleColor:
+    mode: BASE
+    value: "#F7F9FB"
+  titleSize: 14
+  paddings: 8
+  titleWeight: NORMAL
+  textSize: 12
+  filterMode: DEFAULT
+  ignoreFilters: false
+  stateName: null
+layout:
+  rows:
+    - columns:
+        - mode: DIVIDER
+          width:
+            mode: FRACTION
+            value: 1
+          height:
+            mode: FIXED
+            value: 150
+    - columns:
+        - mode: WIDGET
+          widgetKey: text
+          width:
+            mode: FRACTION
+            value: 1
+          height:
+            mode: FIXED
+    - columns:
+        - mode: DIVIDER
+          width:
+            mode: FRACTION
+            value: 1
+          height:
+            mode: FIXED
+            value: 40
+    - columns:
+        - mode: WIDGET
+          widgetKey: text (3)
+          width:
+            mode: FRACTION
+            value: 2
+          height:
+            mode: FIXED
+        - mode: WIDGET
+          widgetKey: text (4)
+          width:
+            mode: FIXED
+            value: 300
+          height:
+            mode: FIXED
+        - mode: WIDGET
+          widgetKey: button (11)
+          width:
+            mode: FIXED
+            value: 260
+          height:
+            mode: FIXED
+      alignment: left
+    - columns:
+        - mode: DIVIDER
+          width:
+            mode: FRACTION
+            value: 1
+          height:
+            mode: FIXED
+            value: 100
+    - columns:
+        - mode: TABS
+          tabs:
+            - label: Вторичные включения типовых подписок
+              innerLayout:
+                rows:
+                  - columns:
+                      - mode: WIDGET
+                        widgetKey: text (1)
+                        width:
+                          mode: FRACTION
+                          value: 1
+                        height:
+                          mode: FIXED
+                      - mode: WIDGET
+                        widgetKey: button (7)
+                        width:
+                          mode: FIXED
+                          value: 260
+                        height:
+                          mode: FIXED
+                      - mode: WIDGET
+                        widgetKey: button (16)
+                        width:
+                          mode: FIXED
+                          value: 290
+                        height:
+                          mode: FIXED
+                    alignment: right
+                  - columns:
+                      - mode: WIDGET
+                        widgetKey: table (5)
+                        width:
+                          mode: FRACTION
+                          value: 1
+                        height:
+                          mode: FIXED
+              displayCondition:
+                mode: FORMULA
+                formula: >-
+                  length( 
+                    arraySymmetricDifference(
+                      process(groupArrayIf("teams_notification_subscriptions"."event_type_name", "teams_notification_subscriptions"."email"=${currentEmployeeEmail})), 
+                      process(groupArray("adaptive_cards_collection"."card_name_ru"))
+                    )
+                  ) AS symmetric_length != 0 
+
+
+                  AND 
+
+
+                  symmetric_length < length (groupArray("adaptive_cards_collection"."card_name_ru"))
+            - label: Нет доступных уведомлений
+              innerLayout:
+                rows:
+                  - columns:
+                      - mode: WIDGET
+                        widgetKey: text (1) (1)
+                        width:
+                          mode: FRACTION
+                          value: 1
+                        height:
+                          mode: FIXED
+                      - mode: WIDGET
+                        widgetKey: button (7) (1)
+                        width:
+                          mode: FIXED
+                          value: 260
+                        height:
+                          mode: FIXED
+                    alignment: right
+                  - columns:
+                      - mode: WIDGET
+                        widgetKey: table (5) (1)
+                        width:
+                          mode: FRACTION
+                          value: 1
+                        height:
+                          mode: FIXED
+              displayCondition:
+                mode: FORMULA
+                formula: >-
+                  empty(
+                    arraySymmetricDifference(
+                      process(groupArrayIf("teams_notification_subscriptions"."event_type_name", "teams_notification_subscriptions"."email"=${currentEmployeeEmail})), 
+                      process(groupArray("adaptive_cards_collection"."card_name_ru"))
+                    )
+                  )
+            - label: Первичное включение
+              innerLayout:
+                rows:
+                  - columns:
+                      - mode: WIDGET
+                        widgetKey: text (5)
+                        width:
+                          mode: FRACTION
+                          value: 2
+                        height:
+                          mode: FIXED
+                      - mode: WIDGET
+                        widgetKey: button (17)
+                        width:
+                          mode: FIXED
+                          value: 260
+                        height:
+                          mode: FIXED
+              displayCondition:
+                mode: FORMULA
+                formula: has(process(groupArray("teams_notification_subscriptions"."email")),
+                  ${currentEmployeeEmail}) = 0
+          likeViewBackground: false
+          textSize: 12
+          width:
+            mode: FRACTION
+            value: 1
+          alignment: center
+widgets:
+  - key: table (5)
+    apiVersion: "17"
+    type: TABLE
+    settings:
+      titleColor:
+        mode: AUTO
+      titleSize: 16
+      paddings: 3, 20, 20, 20
+      titleWeight: BOLD
+      textSize: 14
+      filterMode: DISABLED
+      ignoreFilters: false
+      stateName: null
+      title: ""
+      showMarkdown: false
+      markdownMeasures: []
+      markdownText: ${false}
+      markdownTextSize: 14
+      verticalAlign: CENTER
+      rowsLimit: 15
+      dimensionsAndMeasures:
+        - type: DIMENSION
+          name: Тип уведомления
+          value:
+            mode: FORMULA
+            formula: '"adaptive_cards_collection"."card_name_ru"'
+          dbDataType: String
+          hideEmptyValues: false
+          format:
+            value: STRING
+            mode: BASE
+          formatting:
+            value: AUTO
+            mode: BASE
+          onClick: []
+          displayCondition:
+            mode: DISABLED
+          displayMode: NONE
+          width:
+            value: null
+            mode: PIXEL
+        - type: DIMENSION
+          name: Статус
+          value:
+            mode: FORMULA
+            formula: if("teams_notification_subscriptions"."is_active", '✅', '❌')
+          dbDataType: String
+          hideEmptyValues: false
+          format:
+            value: STRING
+            mode: BASE
+          formatting:
+            value: AUTO
+            mode: BASE
+          onClick: []
+          displayCondition:
+            mode: DISABLED
+          displayMode: TEXT
+          width:
+            value: 100
+            mode: PIXEL
+          color:
+            mode: VALUES
+            items:
+              - value: Активна
+                color:
+                  mode: BASE
+                  value: "#078936"
+              - value: Отключена
+                color:
+                  mode: BASE
+                  value: "#96aabf"
+        - type: DIMENSION
+          name: Дата включения
+          value:
+            mode: FORMULA
+            formula: addHours("teams_notification_subscriptions"."started_at", 3)
+          dbDataType: Nullable(DateTime)
+          hideEmptyValues: false
+          format:
+            value: DATETIME
+            mode: BASE
+          formatting:
+            value: AUTO
+            mode: BASE
+          onClick: []
+          displayCondition:
+            mode: FORMULA
+            formula: >-
+              process(
+
+              arrayExists(
+                elem -> elem = 1, 
+                  groupArrayIf(
+                    "teams_notification_subscriptions"."is_active",
+                    "teams_notification_subscriptions"."email"=${currentEmployeeEmail}
+                    )
+                  )
+                )
+          displayMode: NONE
+          width:
+            value: null
+            mode: PIXEL
+        - type: DIMENSION
+          name: Дата выключения
+          value:
+            mode: FORMULA
+            formula: addHours("teams_notification_subscriptions"."ended_at", 3)
+          dbDataType: Nullable(DateTime)
+          hideEmptyValues: false
+          format:
+            value: DATETIME
+            mode: BASE
+          formatting:
+            value: AUTO
+            mode: BASE
+          onClick: []
+          displayCondition:
+            mode: FORMULA
+            formula: >-
+              process(
+
+              arrayExists(
+                elem -> elem = 0, 
+                  groupArrayIf(
+                    "teams_notification_subscriptions"."is_active",
+                    "teams_notification_subscriptions"."email"=${currentEmployeeEmail}
+                    )
+                  )
+                )
+          displayMode: NONE
+          width:
+            value: null
+            mode: PIXEL
+      filters:
+        - formula: '"teams_notification_subscriptions"."email"=${currentEmployeeEmail}'
+      headColor:
+        mode: BASE
+        value: "#4D85D9"
+      headWeight: BOLD
+      headTextColor:
+        mode: AUTO
+      totalTextColor:
+        mode: AUTO
+      totalWeight: BOLD
+      totalColor:
+        mode: AUTO
+      actionButtons:
+        - buttonType: primary-outlined
+          color:
+            mode: BASE
+            value: "#4D85D9"
+          name: Изменить статус уведомления(й)
+          hint: ""
+          borderColor:
+            mode: BASE
+            value: "#4D85D9"
+          onClick:
+            - activateCondition:
+                formula: ""
+                mode: FORMULA
+              autoUpdate: ALL_VIEWS
+              description: Данное действие изменит статусы выбранных типов уведомлений на
+                противоположные. Вы хотите продолжить?
+              name: Изменить статус типов уведомлений
+              parameters:
+                - isHidden: true
+                  displayName: Почтовый ящик
+                  name: Почтовый ящик
+                  inputMethod: VARIABLE
+                  sourceVariable: currentEmployeeEmail
+                - name: Тип уведомления
+                  inputMethod: COLUMN
+                  columnName: event_type_id
+                  tableName: teams_notification_subscriptions
+                  displayName: ""
+                  isHidden: true
+                  dbDataType: UUID
+                - name: Cтатус
+                  inputMethod: COLUMN
+                  columnName: is_active
+                  tableName: teams_notification_subscriptions
+                  displayName: ""
+                  isHidden: true
+                  dbDataType: UInt8
+                - name: Идентификатор записи
+                  inputMethod: COLUMN
+                  columnName: row_id
+                  tableName: teams_notification_subscriptions
+                  displayName: ""
+                  isHidden: true
+                  dbDataType: UUID
+              scriptKey: 90c90ccf-7a8a-4bb5-b412-5124ccb36f6e
+              type: EXECUTE_SCRIPT
+              hideInactiveButton: true
+              hint: ""
+    localApiVersion: "2"
+  - key: button (7)
+    apiVersion: "17"
+    type: BUTTON
+    settings:
+      paddings: 7
+      buttons:
+        - name: Какие типы уведомлений бывают?
+          onClick:
+            - type: OPEN_VIEW
+              name: Открыть образ
+              parameters: []
+              openIn: DRAWER_WINDOW
+              viewKey: 4a2d9545-04a4-4fc1-8718-a868eb3e00c0
+              mode: EXISTED_VIEW
+              newWindow: true
+              alignment: LEFT
+          buttonType: primary-outlined
+          color:
+            mode: BASE
+            value: "#3070d0"
+          hint: ""
+          borderColor:
+            mode: BASE
+            value: "#D9D9D9"
+      horizontalAlign: CENTER
+      verticalAlign: TOP
+      title: ""
+      titleSize: 14
+      titleColor:
+        mode: AUTO
+      titleWeight: NORMAL
+      showMarkdown: false
+      markdownMeasures: []
+      markdownText: ""
+      markdownTextSize: 14
+  - key: text
+    apiVersion: "17"
+    type: TEXT
+    settings:
+      paddings: 8
+      ignoreFilters: false
+      stateName: null
+      markdownText: >
+        <div style="display:flex; justify-content:center; align-items:center;
+        height:5vh; background:#FFFFFF;">
+          <div style="display:flex; align-items:center; gap:10px;">
+
+            <!-- Контурный ромб -->
+            <div style="
+              width:26px;
+              height:26px;
+              border:7px solid #2684FF;
+              transform:rotate(45deg);
+              border-radius:4px;
+              box-sizing:border-box;
+            "></div>
+
+            <!-- Текст -->
+            <span style="
+              font-size:clamp(24px, 5vw, 32px);
+              font-weight:800;
+              font-family:'Segoe UI','Roboto','Helvetica Neue',sans-serif;
+              background:linear-gradient(90deg,#0052CC,#2684FF,#4C9AFF);
+              -webkit-background-clip:text;
+              background-clip:text;
+              color:transparent;
+              letter-spacing:0.03em;
+            ">
+              IM.Bot JIRA Copilot · Управление подписками
+            </span>
+
+          </div>
+        </div>
+      measures: []
+      filters: []
+      markdownTextSize: 14
+      onClick: []
+  - key: text (1)
+    apiVersion: "17"
+    type: TEXT
+    settings:
+      paddings: 8, 0, 0, 8
+      ignoreFilters: false
+      stateName: null
+      markdownText: '<div style="font-size: 14px;"> <b> Информация об используемых
+        типах уведомлений </b></div>'
+      measures: []
+      filters: []
+      markdownTextSize: 14
+      onClick: []
+  - key: button (11)
+    apiVersion: "17"
+    type: BUTTON
+    settings:
+      paddings: 0, 7, 0, 20
+      buttons:
+        - name: Изменить статус
+          onClick:
+            - type: EXECUTE_SCRIPT
+              name: Выполнить скрипт
+              autoUpdate: ALL_VIEWS
+              scriptKey: d82a2803-f9fc-497e-84c1-49466e2a1ffc
+              parameters:
+                - inputMethod: VARIABLE
+                  sourceVariable: currentEmployeeEmail
+                  name: Почтовый ящик
+              activateCondition:
+                mode: FORMULA
+                formula: ""
+              hideInactiveButton: false
+          buttonType: primary
+          backgroundColor:
+            mode: BASE
+            value: "#4D85D9"
+          color:
+            mode: AUTO
+      horizontalAlign: FILL
+      verticalAlign: CENTER
+      title: ""
+      titleSize: 14
+      titleColor:
+        mode: AUTO
+      titleWeight: NORMAL
+      showMarkdown: false
+      markdownMeasures: []
+      markdownText: ""
+      markdownTextSize: 14
+  - key: text (3)
+    apiVersion: "17"
+    type: TEXT
+    settings:
+      paddings: 0
+      ignoreFilters: false
+      stateName: null
+      markdownText: >
+        <div style="font-size:24px; font-weight:bold; background:#FFFFF;
+        border-radius:6px; padding:7px 12px; text-align:left;
+        display:inline-block;">
+            {ФИО сотрудника}
+        </div>
+      measures:
+        - name: ФИО сотрудника
+          value:
+            mode: FORMULA
+            formula: any("employee"."full_name")
+          dbDataType: Nullable(String)
+          formatting:
+            value: AUTO
+            mode: BASE
+          format:
+            value: STRING
+            mode: BASE
+          displayCondition:
+            mode: DISABLED
+          displaySign: NONE
+      filters:
+        - formula: '"teams_notification_recipients"."email_address"=${currentEmployeeEmail}'
+      markdownTextSize: 14
+      onClick: []
+  - key: button (16)
+    apiVersion: "17"
+    type: BUTTON
+    settings:
+      paddings: 0
+      buttons:
+        - name: Подключение новых типов уведомлений
+          onClick:
+            - type: EXECUTE_SCRIPT
+              name: Выполнить скрипт
+              autoUpdate: ALL_VIEWS
+              scriptKey: d6230529-df0a-43db-9038-b42b007dfc4d
+              parameters:
+                - inputMethod: VARIABLE
+                  sourceVariable: currentEmployeeEmail
+                  name: Почтовый ящик
+                - inputMethod: DYNAMIC_LIST
+                  defaultValue: ""
+                  displayOptions: '"adaptive_cards_collection"."card_name_ru"'
+                  filters:
+                    - formula: >-
+                        "adaptive_cards_collection"."uuid"=
+                        arrayJoin(arraySymmetricDifference(
+                            process(groupArrayIf("teams_notification_subscriptions"."event_type_id", "teams_notification_subscriptions"."email"=${currentEmployeeEmail})), 
+                            process(groupArray("adaptive_cards_collection"."uuid"))
+                          ))
+                  name: Тип уведомления
+                  options: '"adaptive_cards_collection"."uuid"'
+                  considerFilters: false
+                  dbDataType: UUID
+              activateCondition:
+                mode: FORMULA
+                formula: >-
+                  notEmpty(
+                    arraySymmetricDifference(
+                      process(groupArrayIf("teams_notification_subscriptions"."event_type_name", "teams_notification_subscriptions"."email"=${currentEmployeeEmail})), 
+                      process(groupArray("adaptive_cards_collection"."card_name_ru"))
+                    )
+                  )
+              hideInactiveButton: false
+          buttonType: primary
+          backgroundColor:
+            mode: BASE
+            value: "#0078D7"
+          color:
+            mode: BASE
+            value: "#FFFFFF"
+      horizontalAlign: CENTER
+      verticalAlign: CENTER
+      title: ""
+      titleSize: 14
+      titleColor:
+        mode: AUTO
+      titleWeight: NORMAL
+      showMarkdown: false
+      markdownMeasures: []
+      markdownText: ""
+      markdownTextSize: 14
+  - key: text (1) (1)
+    apiVersion: "17"
+    type: TEXT
+    settings:
+      paddings: 8, 0, 0, 20
+      ignoreFilters: false
+      stateName: null
+      markdownText: '<div style="font-size: 16px;"> <b> Информация об используемых
+        типах уведомлений </b></div>'
+      measures: []
+      filters: []
+      markdownTextSize: 14
+      onClick: []
+  - key: button (7) (1)
+    apiVersion: "17"
+    type: BUTTON
+    settings:
+      paddings: 10, 0, 0, 0
+      buttons:
+        - name: Какие типы уведомлений бывают?
+          onClick:
+            - type: OPEN_VIEW
+              name: Открыть образ
+              parameters: []
+              openIn: DRAWER_WINDOW
+              viewKey: 4a2d9545-04a4-4fc1-8718-a868eb3e00c0
+              mode: EXISTED_VIEW
+              newWindow: true
+              alignment: LEFT
+          buttonType: primary-outlined
+          color:
+            mode: BASE
+            value: "#3070d0"
+          hint: ""
+          borderColor:
+            mode: BASE
+            value: "#D9D9D9"
+      horizontalAlign: CENTER
+      verticalAlign: TOP
+      title: ""
+      titleSize: 14
+      titleColor:
+        mode: AUTO
+      titleWeight: NORMAL
+      showMarkdown: false
+      markdownMeasures: []
+      markdownText: ""
+      markdownTextSize: 14
+  - key: table (5) (1)
+    apiVersion: "17"
+    type: TABLE
+    settings:
+      titleColor:
+        mode: AUTO
+      titleSize: 16
+      paddings: 3, 20, 20, 20
+      titleWeight: BOLD
+      textSize: 14
+      filterMode: DISABLED
+      ignoreFilters: false
+      stateName: null
+      title: ""
+      showMarkdown: false
+      markdownMeasures: []
+      markdownText: ${false}
+      markdownTextSize: 14
+      verticalAlign: CENTER
+      rowsLimit: 15
+      dimensionsAndMeasures:
+        - type: DIMENSION
+          name: Тип уведомления
+          value:
+            mode: FORMULA
+            formula: '"adaptive_cards_collection"."card_name_ru"'
+          dbDataType: String
+          hideEmptyValues: false
+          format:
+            value: STRING
+            mode: BASE
+          formatting:
+            value: AUTO
+            mode: BASE
+          onClick: []
+          displayCondition:
+            mode: DISABLED
+          displayMode: NONE
+          width:
+            value: null
+            mode: PIXEL
+        - type: DIMENSION
+          name: Статус
+          value:
+            mode: FORMULA
+            formula: if("teams_notification_subscriptions"."is_active", '✅', '❌')
+          dbDataType: String
+          hideEmptyValues: false
+          format:
+            value: STRING
+            mode: BASE
+          formatting:
+            value: AUTO
+            mode: BASE
+          onClick: []
+          displayCondition:
+            mode: DISABLED
+          displayMode: TEXT
+          width:
+            value: 100
+            mode: PIXEL
+          color:
+            mode: VALUES
+            items:
+              - value: Активна
+                color:
+                  mode: BASE
+                  value: "#078936"
+              - value: Отключена
+                color:
+                  mode: BASE
+                  value: "#96aabf"
+        - type: DIMENSION
+          name: Дата включения
+          value:
+            mode: FORMULA
+            formula: addHours("teams_notification_subscriptions"."started_at", 3)
+          dbDataType: Nullable(DateTime)
+          hideEmptyValues: false
+          format:
+            value: DATETIME
+            mode: BASE
+          formatting:
+            value: AUTO
+            mode: BASE
+          onClick: []
+          displayCondition:
+            mode: FORMULA
+            formula: >-
+              process(
+
+              arrayExists(
+                elem -> elem = 1, 
+                  groupArrayIf(
+                    "teams_notification_subscriptions"."is_active",
+                    "teams_notification_subscriptions"."email"=${currentEmployeeEmail}
+                    )
+                  )
+                )
+          displayMode: NONE
+          width:
+            value: null
+            mode: PIXEL
+        - type: DIMENSION
+          name: Дата выключения
+          value:
+            mode: FORMULA
+            formula: addHours("teams_notification_subscriptions"."ended_at", 3)
+          dbDataType: Nullable(DateTime)
+          hideEmptyValues: false
+          format:
+            value: DATETIME
+            mode: BASE
+          formatting:
+            value: AUTO
+            mode: BASE
+          onClick: []
+          displayCondition:
+            mode: FORMULA
+            formula: >-
+              process(
+
+              arrayExists(
+                elem -> elem = 0, 
+                  groupArrayIf(
+                    "teams_notification_subscriptions"."is_active",
+                    "teams_notification_subscriptions"."email"=${currentEmployeeEmail}
+                    )
+                  )
+                )
+          displayMode: NONE
+          width:
+            value: null
+            mode: PIXEL
+      filters:
+        - formula: '"teams_notification_subscriptions"."email"=${currentEmployeeEmail}'
+      headColor:
+        mode: BASE
+        value: "#4D85D9"
+      headWeight: BOLD
+      headTextColor:
+        mode: AUTO
+      totalTextColor:
+        mode: AUTO
+      totalWeight: BOLD
+      totalColor:
+        mode: AUTO
+      actionButtons:
+        - buttonType: primary-outlined
+          color:
+            mode: BASE
+            value: "#4D85D9"
+          name: Изменить статус уведомления(й)
+          hint: ""
+          borderColor:
+            mode: BASE
+            value: "#4D85D9"
+          onClick:
+            - activateCondition:
+                formula: ""
+                mode: FORMULA
+              autoUpdate: ALL_VIEWS
+              description: Данное действие изменит статусы выбранных типов уведомлений на
+                противоположные. Вы хотите продолжить?
+              name: Изменить статус типов уведомлений
+              parameters:
+                - isHidden: true
+                  displayName: Почтовый ящик
+                  name: Почтовый ящик
+                  inputMethod: VARIABLE
+                  sourceVariable: currentEmployeeEmail
+                - isHidden: true
+                  displayName: Тип уведомления
+                  name: Тип уведомления
+                  inputMethod: COLUMN
+                  columnName: event_type_id
+                  tableName: teams_notification_subscriptions
+                  dbDataType: UUID
+                - name: Cтатус
+                  inputMethod: COLUMN
+                  columnName: is_active
+                  tableName: teams_notification_subscriptions
+                  displayName: ""
+                  isHidden: true
+                  dbDataType: UInt8
+                - name: Идентификатор записи
+                  inputMethod: COLUMN
+                  columnName: row_id
+                  tableName: teams_notification_subscriptions
+                  displayName: ""
+                  isHidden: true
+                  dbDataType: UUID
+              scriptKey: 6306a756-632f-4572-8c34-e58add858d7f
+              type: EXECUTE_SCRIPT
+              hideInactiveButton: true
+              hint: ""
+    localApiVersion: "2"
+  - key: text (4)
+    apiVersion: "17"
+    type: TEXT
+    settings:
+      paddings: 10
+      ignoreFilters: false
+      stateName: null
+      markdownText: >
+        <div style="font-size:14px; font-weight:bold; background:#EDF4FD;
+        border-radius:8px; padding:8px 12px; display:inline-block;
+        text-align:center;">
+            Статус системы уведомлений {Статус глобальной подписки}
+        </div>
+      measures:
+        - name: Статус глобальной подписки
+          value:
+            mode: FORMULA
+            formula: if(anyIf("teams_notification_recipients"."is_active",
+              "teams_notification_recipients"."email_address" =
+              ${currentEmployeeEmail}) = 1, '✅', '❌')
+          dbDataType: String
+          formatting:
+            value: AUTO
+            mode: BASE
+          format:
+            value: STRING
+            mode: BASE
+          displayCondition:
+            mode: DISABLED
+          displaySign: NONE
+      filters: []
+      markdownTextSize: 14
+      onClick: []
+  - key: text (5)
+    apiVersion: "17"
+    type: TEXT
+    settings:
+      paddings: 8, 0, 0, 8
+      ignoreFilters: false
+      stateName: null
+      markdownText: '<div style="font-size: 16px;"> <b> Информация об используемых
+        типах уведомлений </b></div>'
+      measures: []
+      filters: []
+      markdownTextSize: 14
+      onClick: []
+  - key: button (17)
+    apiVersion: "17"
+    type: BUTTON
+    settings:
+      paddings: 8
+      buttons:
+        - name: Какие типы уведомлений бывают?
+          onClick:
+            - type: OPEN_VIEW
+              name: Открыть образ
+              parameters: []
+              openIn: DRAWER_WINDOW
+              viewKey: 4a2d9545-04a4-4fc1-8718-a868eb3e00c0
+              mode: EXISTED_VIEW
+              newWindow: true
+              alignment: LEFT
+          buttonType: primary-outlined
+          color:
+            mode: BASE
+            value: "#3070d0"
+          hint: ""
+          borderColor:
+            mode: BASE
+            value: "#D9D9D9"
+        - name: Подключение уведомлений
+          onClick:
+            - type: EXECUTE_SCRIPT
+              name: Выполнить скрипт
+              autoUpdate: ALL_VIEWS
+              scriptKey: c1b8087c-3cfb-45a3-9875-58b71212947b
+              parameters:
+                - inputMethod: VARIABLE
+                  sourceVariable: currentEmployeeEmail
+                  name: Почтовый ящик
+                - inputMethod: DYNAMIC_LIST
+                  defaultValue: ""
+                  displayOptions: '"adaptive_cards_collection"."card_name_ru"'
+                  filters:
+                    - formula: '"adaptive_cards_collection"."uuid"=
+                        arrayJoin(arraySymmetricDifference(     process(groupArrayIf("teams_notification_subscriptions"."event_type_id",
+                        "teams_notification_subscriptions"."email"=${currentEmployeeEmail})),      process(groupArray("adaptive_cards_collection"."uuid"))   ))'
+                  name: Тип уведомления
+                  options: '"adaptive_cards_collection"."uuid"'
+                  considerFilters: false
+                  dbDataType: UUID
+          buttonType: primary
+          backgroundColor:
+            mode: BASE
+            value: "#0078D7"
+          color:
+            mode: AUTO
+      horizontalAlign: FILL
+      verticalAlign: TOP
+      title: ""
+      titleSize: 14
+      titleColor:
+        mode: AUTO
+      titleWeight: NORMAL
+      showMarkdown: false
+      markdownMeasures: []
+      markdownText: ""
+      markdownTextSize: 14
