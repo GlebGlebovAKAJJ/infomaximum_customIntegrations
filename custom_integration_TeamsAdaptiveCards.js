@@ -306,6 +306,87 @@ const highlightMentionsInInlines = inlines => {
   return result;
 };
 
+const buildRichTextInlines = rawText => {
+  const text = typeof rawText === 'string' ? rawText : String(rawText ?? '');
+  if (!text.length) {
+    return [{ type: 'TextRun', text: '', wrap: true }];
+  }
+
+  const inlines = [];
+  let buffer = '';
+  let bold = false;
+  let italic = false;
+  let code = false;
+
+  const pushBuffer = () => {
+    if (!buffer.length) {
+      return;
+    }
+    const run = { type: 'TextRun', text: buffer, wrap: true };
+    if (bold) {
+      run.weight = 'Bolder';
+    }
+    if (italic) {
+      run.italic = true;
+    }
+    if (code) {
+      run.fontType = 'Monospace';
+    }
+    inlines.push(run);
+    buffer = '';
+  };
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    const nextTwo = text.slice(i, i + 2);
+
+    if (nextTwo === '**') {
+      pushBuffer();
+      bold = !bold;
+      i += 1;
+      continue;
+    }
+    if (char === '*' && text[i + 1] !== '*') {
+      pushBuffer();
+      italic = !italic;
+      continue;
+    }
+    if (char === '`') {
+      pushBuffer();
+      code = !code;
+      continue;
+    }
+    if (char === '[') {
+      const closingBracket = text.indexOf(']', i + 1);
+      if (closingBracket !== -1 && text[closingBracket + 1] === '(') {
+        const closingParen = text.indexOf(')', closingBracket + 2);
+        if (closingParen !== -1) {
+          pushBuffer();
+          const label = text.slice(i + 1, closingBracket);
+          const url = text.slice(closingBracket + 2, closingParen);
+          inlines.push({
+            type: 'TextRun',
+            text: label,
+            wrap: true,
+            color: 'Accent',
+            selectAction: {
+              type: 'Action.OpenUrl',
+              url: safe(url)
+            }
+          });
+          i = closingParen;
+          continue;
+        }
+      }
+    }
+
+    buffer += char;
+  }
+
+  pushBuffer();
+  return inlines.length ? inlines : [{ type: 'TextRun', text: '', wrap: true }];
+};
+
 const buildAdaptiveTableElement = (tableModel, hasPreviousElements) => {
   if (!tableModel || !tableModel.rows || !tableModel.rows.length) {
     return null;
@@ -337,6 +418,52 @@ const buildAdaptiveTableElement = (tableModel, hasPreviousElements) => {
     tableElement.spacing = 'Small';
   }
   return tableElement;
+};
+
+const buildTableModel = rawRows => {
+  if (!Array.isArray(rawRows) || !rawRows.length) {
+    return null;
+  }
+
+  const sanitizeRow = row => {
+    if (typeof row !== 'string') {
+      return null;
+    }
+    const trimmed = row.trim();
+    if (!trimmed.length) {
+      return null;
+    }
+    if (/^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?$/.test(trimmed)) {
+      return null;
+    }
+    return trimmed
+      .replace(/^\|/, '')
+      .replace(/\|$/, '')
+      .split('|')
+      .map(cell => cell.replace(/\\\|/g, '|').trim());
+  };
+
+  const rows = rawRows
+    .map(sanitizeRow)
+    .filter(Array.isArray);
+
+  if (!rows.length) {
+    return null;
+  }
+
+  const columnCount = rows.reduce((max, row) => Math.max(max, row.length), 0);
+  if (!columnCount) {
+    return null;
+  }
+
+  const normalizedRows = rows.map(row => {
+    if (row.length === columnCount) {
+      return row;
+    }
+    return row.concat(Array(columnCount - row.length).fill(''));
+  });
+
+  return { columnCount, rows: normalizedRows };
 };
 
 const splitTextByTables = text => {
