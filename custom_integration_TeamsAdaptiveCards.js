@@ -1045,6 +1045,7 @@ const getBadgeAndButton = (issueType, blockType, input) => {
       else if (blockType === 'status') badgeText = "Изменение статуса в задаче";
       else if (blockType === 'assignee') badgeText = "Новая задача, где ты — Исполнитель";
       else if (blockType === 'nested') badgeText = "Новая задача";
+      else if (blockType === 'project_issue') badgeText = "Новая задача в проекте";
       openButtonTitle = "Открыть задачу";
   }
   if (blockType === 'specific_comment') {
@@ -1122,7 +1123,17 @@ const buildRoleFacts = (input, isEpic, isPRK, blockType) => {
       const val3 = safe(input.due_date);
       if (val3 && val3 !== "-") facts.push({ title: "Дата исполнения:", value: val3 });
     }
-  } else if (blockType === 'nested') {
+  } else if (blockType === 'nested' || blockType === 'project_issue') {
+    const projectName = safe(input.project_name || input.issue_project_name);
+    if (blockType === 'project_issue' && projectName && projectName !== "-") {
+      facts.push({ title: "Проект:", value: projectName });
+    }
+    if (blockType === 'project_issue') {
+      const issueTypeName = safe(input.issue_type_name || input.issue_type);
+      if (issueTypeName && issueTypeName !== "-") {
+        facts.push({ title: "Тип:", value: issueTypeName });
+      }
+    }
     const val1 = safe(input.reporter);
     if (val1 && val1 !== "-") facts.push({ title: "Автор:", value: val1 });
     const val2 = safe(input.assignee);
@@ -1149,7 +1160,17 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
         type: "Badge",
         text: badgeText,
         size: "ExtraLarge",
-        style: blockType === 'comment' ? "Accent" : blockType === 'status' ? "Accent" : blockType === 'assignee' ? "Attention" : blockType === 'specific_comment' ? "Warning" : "Good",
+        style: blockType === 'comment'
+          ? "Accent"
+          : blockType === 'status'
+            ? "Accent"
+            : blockType === 'assignee'
+              ? "Attention"
+              : blockType === 'specific_comment'
+                ? "Warning"
+                : blockType === 'project_issue'
+                  ? "Warning"
+                  : "Good",
         icon: blockType === 'comment' ? "CommentAdd" : blockType === 'status' ? "ArrowSync" : "PersonSquare"
       },
       {
@@ -1388,9 +1409,55 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
       },
       ...descriptionParts
     ];
-  } else if (blockType === 'nested') {
+  } else if (blockType === 'nested' || blockType === 'project_issue') {
+    const descriptionExpanded = blockType === 'project_issue';
     let descriptionParts = [];
     if (input.separated_description_part && input.separated_description_part.trim() !== '') {
+      const showMoreAction = {
+        type: "ActionSet",
+        id: "showMoreDesc",
+        actions: [
+          {
+            type: "Action.ToggleVisibility",
+            title: "Показать полностью",
+            targetElements: ["fullDescription", "showMoreDesc", "showLessDesc"],
+            mode: "secondary"
+          }
+        ]
+      };
+      if (descriptionExpanded) {
+        showMoreAction.isVisible = false;
+      }
+      const showLessAction = {
+        type: "ActionSet",
+        id: "showLessDesc",
+        actions: [
+          {
+            type: "Action.ToggleVisibility",
+            title: "Скрыть",
+            targetElements: ["fullDescription", "showMoreDesc", "showLessDesc"]
+          }
+        ]
+      };
+      if (!descriptionExpanded) {
+        showLessAction.isVisible = false;
+      }
+      const fullDescriptionContainer = {
+        type: "Container",
+        id: "fullDescription",
+        style: "emphasis",
+        spacing: "None",
+        items: [
+          {
+            type: "TextBlock",
+            text: prettify(input.separated_description_part),
+            wrap: true
+          }
+        ]
+      };
+      if (!descriptionExpanded) {
+        fullDescriptionContainer.isVisible = false;
+      }
       descriptionParts = [
         {
           type: "TextBlock",
@@ -1404,44 +1471,9 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
           wrap: true,
           spacing: "None"
         },
-        {
-          type: "ActionSet",
-          id: "showMoreDesc",
-          actions: [
-            {
-              type: "Action.ToggleVisibility",
-              title: "Показать полностью",
-              targetElements: ["fullDescription", "showMoreDesc", "showLessDesc"],
-              mode: "secondary"
-            }
-          ]
-        },
-        {
-          type: "ActionSet",
-          id: "showLessDesc",
-          isVisible: false,
-          actions: [
-            {
-              type: "Action.ToggleVisibility",
-              title: "Скрыть",
-              targetElements: ["fullDescription", "showMoreDesc", "showLessDesc"]
-            }
-          ]
-        },
-        {
-          type: "Container",
-          id: "fullDescription",
-          isVisible: false,
-          style: "emphasis",
-          spacing: "None",
-          items: [
-            {
-              type: "TextBlock",
-              text: prettify(input.separated_description_part),
-              wrap: true
-            }
-          ]
-        }
+        showMoreAction,
+        showLessAction,
+        fullDescriptionContainer
       ];
     } else {
       descriptionParts = [
@@ -1835,7 +1867,7 @@ const extractCardNames = (raw) => {
 
 app = {
   schema: 2,
-  version: '1.7.0',
+  version: '1.7.1',
   label: 'Jira → Teams Уведомления',
   description: 'Уведомления о событиях Jira в Microsoft Teams. Автоматически адаптируется под тип задачи (эпик, задача, подзадача) и роль получателя',
   blocks: {
@@ -1936,6 +1968,29 @@ app = {
       ],
 
       executePagination: (service, bundle) => executeJiraBlock(service, 'nested', bundle)
+    },
+    NewProjectIssue: {
+      label: "Новая задача в проекте",
+      description: "Отправляет адаптивную карточку в Teams при создании новой задачи внутри проекта (с поддержкой отображения эпика и скрывающегося описания)",
+      inputFields: [
+        { key: "issue_key", label: "Ключ задачи", type: "text", hint: "issue_key", required: true },
+        { key: "issue_summary", label: "Название задачи", type: "text", hint: "issue_summary", required: true },
+        { key: "issue_type", label: "Тип задачи", type: "text", hint: "issue_type", required: true },
+        { key: "issue_type_name", label: "Название типа задачи", type: "text", hint: "issue_type_name", required: true },
+        { key: "issue_description", label: "Описание задачи", type: "text", hint: "issue_description", required: true },
+        { key: "original_description", label: "Короткое описание", type: "text", hint: "original_description", required: true },
+        { key: "separated_description_part", label: "Отделенная часть описания", type: "text", hint: "separated_description_part" },
+        { key: "context_issue_key", label: "Ключ эпика", type: "text", hint: "context_issue_key (если есть связь с эпиком)" },
+        { key: "context_issue_summary", label: "Название эпика", type: "text", hint: "context_issue_summary" },
+        { key: "project_name", label: "Название проекта", type: "text", hint: "project_name" },
+        { key: "reporter", label: "Автор задачи", type: "text", hint: "reporter" },
+        { key: "created_by", label: "Инициатор", type: "text", hint: "created_by", required: true },
+        { key: "assignee", label: "Исполнитель задачи", type: "text", hint: "assignee" },
+        { key: "target_emails", label: "Получатели уведомления", type: "text", hint: "target_emails", required: true },
+        { key: "card_uuid", label: "UUID адаптивной карточки", type: "text", hint: "card_uuid", required: true }
+      ],
+
+      executePagination: (service, bundle) => executeJiraBlock(service, 'project_issue', bundle)
     },
     NewCardType: {
       label: "Добавление типа уведомления (Системное)",
