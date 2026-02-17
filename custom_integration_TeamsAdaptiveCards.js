@@ -2468,18 +2468,6 @@ app = {
           listSections.length ? listSections : null
         );
       }
-    },
-    RequestFeedback: {
-      label: "Запрос обратной связи",
-      description: "Отправляет интерактивную адаптивную карточку с формой для оценки системы уведомлений JIRA → Teams",
-      inputFields: [
-        { key: "employee_name", label: "Имя сотрудника", hint: "employee_name", type: "text", required: true },
-        { key: "user_email", label: "E-mail пользователя", hint: "user_email", type: "text", required: true },
-        { key: "card_uuid", label: "UUID адаптивной карточки", type: "text", hint: "card_uuid", required: true },
-        { key: "target_emails", label: "Получатели уведомления", type: "text", hint: "target_emails", required: true }
-      ],
-
-      executePagination: (service, bundle) => executeFeedbackBlock(service, bundle)
     }
   },
   connections: {
