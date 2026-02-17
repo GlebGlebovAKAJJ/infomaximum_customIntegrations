@@ -1953,6 +1953,151 @@ const executeFeedbackBlock = (service, bundle) => {
   return buildOutput(response, sendTime, duration, targetEmails, webhookUrl, sendUid, cardUuid);
 };
 
+// Выполняет блок уведомления о новом тикете OTRS, связанном с Jira-задачей.
+const executeOtrsTicketBlock = (service, bundle) => {
+  const input = bundle.inputData;
+  const common = getCommonData(bundle, input);
+  const cardUuid = input.card_uuid;
+
+  const issueUrlRaw = coalesceInputValue(input, ["issue_url"]);
+  const issueUrl = issueUrlRaw ? safe(issueUrlRaw) : `${common.jiraBaseUrl}/browse/${safe(input.issue_key)}`;
+  const otrsBaseUrl = (bundle.authData.otrs_base_url || "").trim().replace(/\/$/, "");
+  const ticketNumberRaw = coalesceInputValue(input, ["ticket_number", "otrs_ticket_number", "ticket_no", "otrs_number"]);
+  const ticketIdRaw = coalesceInputValue(input, ["ticket_id", "otrs_ticket_id", "otrs_id"]);
+  const normalizedTicketId = ticketIdRaw ? String(ticketIdRaw).trim() : "";
+  const normalizedTicketNumber = ticketNumberRaw ? String(ticketNumberRaw).trim() : "";
+  let otrsUrl = null;
+  if (otrsBaseUrl) {
+    if (normalizedTicketId) {
+      otrsUrl = `${otrsBaseUrl}/index.pl?Action=AgentTicketZoom;TicketID=${encodeURIComponent(normalizedTicketId)}`;
+    } else if (normalizedTicketNumber) {
+      otrsUrl = `${otrsBaseUrl}/index.pl?Action=AgentTicketZoom;TicketNumber=${encodeURIComponent(normalizedTicketNumber)}`;
+    } else {
+      otrsUrl = otrsBaseUrl;
+    }
+  }
+  const titleRaw = coalesceInputValue(input, ["ticket_title", "issue_summary"]);
+  const titleValue = safe(titleRaw || `Тикет OTRS #${ticketNumberRaw || input.issue_key || "-"}`);
+  const ticketNumberValue = safe(ticketNumberRaw || input.issue_key);
+  const ticketIdValue = safe(ticketIdRaw);
+  const reporterValue = safe(input.reporter_name || input.reporter || input.reporter_email);
+  const createdAtValue = safe(input.created_at);
+  const epicLinkValue = safe(input.epic_link_url || input.epic_link_key || input.epic_link_name);
+
+  const otrsFacts = [
+    { title: "Номер тикета:", value: ticketNumberValue },
+    ...(ticketIdRaw ? [{ title: "ID тикета:", value: ticketIdValue }] : []),
+    ...(createdAtValue !== "-" ? [{ title: "Дата создания:", value: createdAtValue }] : [])
+  ];
+  const jiraFacts = [
+    { title: "Ключ задачи:", value: safe(input.issue_key) },
+    ...(epicLinkValue !== "-" ? [{ title: "Ссылка на эпик:", value: epicLinkValue }] : []),
+    ...(reporterValue !== "-" ? [{ title: "Инициатор:", value: reporterValue }] : [])
+  ];
+
+  const card = {
+    type: "AdaptiveCard",
+    version: "1.5",
+    body: [
+      {
+        type: "TextBlock",
+        text: "powered by Proceset",
+        size: "Small",
+        horizontalAlignment: "Right",
+        isSubtle: true,
+        spacing: "None"
+      },
+      {
+        type: "Container",
+        style: "accent",
+        showBorder: true,
+        roundedCorners: true,
+        spacing: "Medium",
+        items: [
+          {
+            type: "Badge",
+            text: "Новый тикет в OTRS",
+            size: "ExtraLarge",
+            style: "Accent",
+            icon: "Feed"
+          },
+          {
+            type: "TextBlock",
+            text: titleValue,
+            wrap: true,
+            weight: "Bolder",
+            size: "Medium",
+            spacing: "Small"
+          }
+        ]
+      },
+      {
+        type: "Container",
+        style: "emphasis",
+        showBorder: true,
+        roundedCorners: true,
+        spacing: "Medium",
+        items: [
+          {
+            type: "TextBlock",
+            text: "OTRS",
+            weight: "Bolder",
+            spacing: "None"
+          },
+          {
+            type: "FactSet",
+            spacing: "Small",
+            facts: otrsFacts
+          }
+        ]
+      },
+      {
+        type: "Container",
+        style: "emphasis",
+        showBorder: true,
+        roundedCorners: true,
+        spacing: "Medium",
+        items: [
+          {
+            type: "TextBlock",
+            text: "JIRA",
+            weight: "Bolder",
+            spacing: "None"
+          },
+          {
+            type: "FactSet",
+            spacing: "Small",
+            facts: jiraFacts
+          }
+        ]
+      }
+    ],
+    actions: [
+      ...(otrsUrl
+        ? [{
+          type: "Action.OpenUrl",
+          title: "Открыть тикет в OTRS",
+          url: otrsUrl,
+          iconUrl: "icon:Link",
+          style: "positive"
+        }]
+        : []),
+      {
+        type: "Action.OpenUrl",
+        title: "Открыть задачу в Jira",
+        url: issueUrl,
+        iconUrl: "icon:Link",
+        ...(otrsUrl ? { mode: "secondary" } : { style: "positive" })
+      }
+    ],
+    data: { targetEmails: common.targetEmails, card_uuid: cardUuid, send_uid: common.sendUid }
+  };
+
+  const response = sendCard(service, common.webhookUrl, card, common.sendUid);
+  const duration = Date.now() - common.start;
+  return buildOutput(response, common.sendTime, duration, common.targetEmails, common.webhookUrl, common.sendUid, cardUuid);
+};
+
 app = {
   schema: 2,
   version: '1.7.1',
@@ -2079,6 +2224,26 @@ app = {
       ],
 
       executePagination: (service, bundle) => executeJiraBlock(service, 'project_issue', bundle)
+    },
+    NewOtrsTicket: {
+      label: "Новый тикет в OTRS",
+      description: "Отправляет адаптивную карточку в Teams при создании тикета OTRS и его связи с Jira-задачей.",
+      inputFields: [
+        { key: "ticket_number", label: "Номер тикета OTRS", type: "text", hint: "ticket_number" },
+        { key: "ticket_id", label: "ID тикета OTRS", type: "text", hint: "ticket_id" },
+        { key: "ticket_title", label: "Название обращения OTRS", type: "text", hint: "ticket_title" },
+        { key: "issue_key", label: "Ключ задачи Jira", type: "text", hint: "issue_key", required: true },
+        { key: "issue_summary", label: "Название задачи Jira", type: "text", hint: "issue_summary", required: true },
+        { key: "reporter_name", label: "Инициатор", type: "text", hint: "reporter_name" },
+        { key: "epic_link_key", label: "Ключ эпика", type: "text", hint: "epic_link_key" },
+        { key: "epic_link_name", label: "Название эпика", type: "text", hint: "epic_link_name" },
+        { key: "epic_link_url", label: "Ссылка на эпик", type: "text", hint: "epic_link_url" },
+        { key: "created_at", label: "Дата создания", type: "text", hint: "created_at" },
+        { key: "target_emails", label: "Получатели уведомления", type: "text", hint: "target_emails", required: true },
+        { key: "card_uuid", label: "UUID адаптивной карточки", type: "text", hint: "card_uuid", required: true }
+      ],
+
+      executePagination: (service, bundle) => executeOtrsTicketBlock(service, bundle)
     },
     NewCardType: {
       label: "Добавление типа уведомления (Системное)",
@@ -2491,6 +2656,14 @@ app = {
           required: true
         },
         {
+          key: "otrs_base_url",
+          label: "Базовый URL OTRS",
+          type: "text",
+          placeholder: "https://example.otrs.domain.name.com",
+          hint: "otrs_base_url",
+          required: false
+        },
+        {
           key: "authorize_button",
           type: "button",
           label: "Проверить подключение",
@@ -2530,6 +2703,7 @@ app = {
             saveFields: () => ({
               incoming_webhook_url: null,
               jira_base_url: "",
+              otrs_base_url: "",
               connect_status: null
             }),
             message: () => "Подключение удалено."
@@ -2538,7 +2712,8 @@ app = {
       ],
       execute: (service, bundle) => ({
         webhookUrl: bundle.authData.incoming_webhook_url,
-        jiraBaseUrl: bundle.authData.jira_base_url
+        jiraBaseUrl: bundle.authData.jira_base_url,
+        otrsBaseUrl: bundle.authData.otrs_base_url
       })
     }
   }
