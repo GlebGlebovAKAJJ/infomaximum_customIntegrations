@@ -1865,6 +1865,94 @@ const extractCardNames = (raw) => {
   return segments;
 };
 
+// Выполняет блок запроса обратной связи, отправляя интерактивную карточку с формой оценки.
+const executeFeedbackBlock = (service, bundle) => {
+  const input = bundle.inputData;
+  const webhookUrl = bundle.authData.incoming_webhook_url;
+  const targetEmails = (input.target_emails || "").split(",").map(e => e.trim()).filter(Boolean);
+  const sendUid = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+  const sendTime = new Date().toISOString();
+  const start = Date.now();
+  const cardUuid = input.card_uuid;
+
+  const card = {
+    type: "AdaptiveCard",
+    "$schema": "https://adaptivecards.io/schemas/adaptive-card.json",
+    version: "1.5",
+    id: cardUuid,
+    body: [
+      {
+        type: "TextBlock",
+        text: "powered by Proceset",
+        size: "Small",
+        horizontalAlignment: "Right",
+        isSubtle: true,
+        spacing: "None"
+      },
+      {
+        type: "Container",
+        style: "accent",
+        showBorder: true,
+        roundedCorners: true,
+        spacing: "Medium",
+        items: [
+          {
+            type: "Badge",
+            text: "Системное уведомление",
+            size: "ExtraLarge",
+            style: "Good",
+            icon: "Feed",
+            horizontalAlignment: "Center"
+          },
+          {
+            type: "TextBlock",
+            text: "Оцените систему уведомлений JIRA → Teams",
+            wrap: true,
+            weight: "Bolder",
+            size: "Medium",
+            spacing: "Small",
+            horizontalAlignment: "Center"
+          }
+        ]
+      },
+      {
+        type: "Input.Rating",
+        label: "Ваша оценка",
+        id: "feedbackMark",
+        value: 0,
+        style: "star"
+      },
+      {
+        type: "TextBlock",
+        text: "Развернутая обратная связь (необязательно)",
+        wrap: true,
+        spacing: "Medium"
+      },
+      {
+        type: "Input.Text",
+        id: "feedbackText",
+        placeholder: "Введите свою идею, предложение или замечание",
+        isMultiline: true
+      }
+    ],
+    actions: [
+      {
+        type: "Action.Submit",
+        title: "Отправить",
+        style: "positive",
+        data: {
+          action: "send_feedback"
+        }
+      }
+    ],
+    data: { targetEmails, card_uuid: cardUuid, send_uid: sendUid }
+  };
+
+  const response = sendCard(service, webhookUrl, card, sendUid);
+  const duration = Date.now() - start;
+  return buildOutput(response, sendTime, duration, targetEmails, webhookUrl, sendUid, cardUuid);
+};
+
 app = {
   schema: 2,
   version: '1.7.1',
@@ -2380,6 +2468,18 @@ app = {
           listSections.length ? listSections : null
         );
       }
+    },
+    RequestFeedback: {
+      label: "Запрос обратной связи",
+      description: "Отправляет интерактивную адаптивную карточку с формой для оценки системы уведомлений JIRA → Teams",
+      inputFields: [
+        { key: "employee_name", label: "Имя сотрудника", hint: "employee_name", type: "text", required: true },
+        { key: "user_email", label: "E-mail пользователя", hint: "user_email", type: "text", required: true },
+        { key: "card_uuid", label: "UUID адаптивной карточки", type: "text", hint: "card_uuid", required: true },
+        { key: "target_emails", label: "Получатели уведомления", type: "text", hint: "target_emails", required: true }
+      ],
+
+      executePagination: (service, bundle) => executeFeedbackBlock(service, bundle)
     }
   },
   connections: {
