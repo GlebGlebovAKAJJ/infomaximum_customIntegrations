@@ -1976,22 +1976,21 @@ const executeOtrsTicketBlock = (service, bundle) => {
       otrsUrl = otrsBaseUrl;
     }
   }
-  const titleRaw = coalesceInputValue(input, ["ticket_title", "issue_summary"]);
+  const titleRaw = coalesceInputValue(input, ["ticket_title"]);
   const titleValue = safe(titleRaw || `Тикет OTRS #${ticketNumberRaw || input.issue_key || "-"}`);
   const ticketNumberValue = safe(ticketNumberRaw || input.issue_key);
-  const ticketIdValue = safe(ticketIdRaw);
+  const clientIdRaw = coalesceInputValue(input, ["company_domain", "client_id"]);
+  const clientIdValue = safe(clientIdRaw);
   const reporterValue = safe(input.reporter_name || input.reporter || input.reporter_email);
   const createdAtValue = safe(input.created_at);
-  const epicLinkValue = safe(input.epic_link_url || input.epic_link_key || input.epic_link_name);
 
   const otrsFacts = [
     { title: "Номер тикета:", value: ticketNumberValue },
-    ...(ticketIdRaw ? [{ title: "ID тикета:", value: ticketIdValue }] : []),
+    ...(clientIdRaw ? [{ title: "ID клиента:", value: clientIdValue }] : []),
     ...(createdAtValue !== "-" ? [{ title: "Дата создания:", value: createdAtValue }] : [])
   ];
   const jiraFacts = [
     { title: "Ключ задачи:", value: safe(input.issue_key) },
-    ...(epicLinkValue !== "-" ? [{ title: "Ссылка на эпик:", value: epicLinkValue }] : []),
     ...(reporterValue !== "-" ? [{ title: "Инициатор:", value: reporterValue }] : [])
   ];
 
@@ -2087,7 +2086,7 @@ const executeOtrsTicketBlock = (service, bundle) => {
         title: "Открыть задачу в Jira",
         url: issueUrl,
         iconUrl: "icon:Link",
-        ...(otrsUrl ? { mode: "secondary" } : { style: "positive" })
+        style: "positive"
       }
     ],
     data: { targetEmails: common.targetEmails, card_uuid: cardUuid, send_uid: common.sendUid }
@@ -2230,14 +2229,10 @@ app = {
       description: "Отправляет адаптивную карточку в Teams при создании тикета OTRS и его связи с Jira-задачей.",
       inputFields: [
         { key: "ticket_number", label: "Номер тикета OTRS", type: "text", hint: "ticket_number" },
-        { key: "ticket_id", label: "ID тикета OTRS", type: "text", hint: "ticket_id" },
         { key: "ticket_title", label: "Название обращения OTRS", type: "text", hint: "ticket_title" },
+        { key: "company_domain", label: "ID клиента", type: "text", hint: "company_domain" },
         { key: "issue_key", label: "Ключ задачи Jira", type: "text", hint: "issue_key", required: true },
-        { key: "issue_summary", label: "Название задачи Jira", type: "text", hint: "issue_summary", required: true },
-        { key: "reporter_name", label: "Инициатор", type: "text", hint: "reporter_name" },
-        { key: "epic_link_key", label: "Ключ эпика", type: "text", hint: "epic_link_key" },
-        { key: "epic_link_name", label: "Название эпика", type: "text", hint: "epic_link_name" },
-        { key: "epic_link_url", label: "Ссылка на эпик", type: "text", hint: "epic_link_url" },
+        { key: "reporter_name", label: "Инициатор", type: "text", hint: "reporter_username" },
         { key: "created_at", label: "Дата создания", type: "text", hint: "created_at" },
         { key: "target_emails", label: "Получатели уведомления", type: "text", hint: "target_emails", required: true },
         { key: "card_uuid", label: "UUID адаптивной карточки", type: "text", hint: "card_uuid", required: true }
