@@ -414,7 +414,7 @@ const typeComposer = function (e, t) {
                 { name: "emailAddress", type: "String" },
                 { name: "displayName", type: "String" },
                 { name: "active", type: "Boolean" },
-                { name: "timeZone", type: "String" },
+                { name: "timeZone", type: "String" }
             ],
         },
         { name: "created", type: "String" },

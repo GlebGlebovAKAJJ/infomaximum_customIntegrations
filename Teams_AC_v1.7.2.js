@@ -21,20 +21,6 @@ const decodeUriComponentSafe = value => {
   }
 };
 
-const toTextValue = value => {
-  if (value === undefined || value === null) {
-    return '';
-  }
-  if (typeof value === 'string') {
-    return value;
-  }
-  try {
-    return String(value);
-  } catch (error) {
-    return '';
-  }
-};
-
 const coalesceInputValue = (input, candidateKeys = []) => {
   if (!input || typeof input !== "object") {
     return undefined;
@@ -331,7 +317,6 @@ const buildRichTextInlines = rawText => {
   let bold = false;
   let italic = false;
   let code = false;
-  const canStartUrl = char => !char || /[\s([<{'"`]/.test(char);
 
   const pushBuffer = () => {
     if (!buffer.length) {
@@ -395,44 +380,11 @@ const buildRichTextInlines = rawText => {
       }
     }
 
-    // Auto-link bare URLs so users can always click them even without markdown link syntax.
-    if (!code && canStartUrl(i > 0 ? text[i - 1] : '')) {
-      const urlMatch = text.slice(i).match(/^https?:\/\/\S+/i);
-      if (urlMatch) {
-        const fullCandidate = urlMatch[0];
-        let normalizedUrl = fullCandidate;
-        let trailingPunctuation = '';
-        while (normalizedUrl.length && /[.,!?;:)]/.test(normalizedUrl.slice(-1))) {
-          trailingPunctuation = normalizedUrl.slice(-1) + trailingPunctuation;
-          normalizedUrl = normalizedUrl.slice(0, -1);
-        }
-        if (normalizedUrl.length) {
-          pushBuffer();
-          inlines.push({
-            type: 'TextRun',
-            text: normalizedUrl,
-            wrap: true,
-            color: 'Accent',
-            selectAction: {
-              type: 'Action.OpenUrl',
-              url: safe(normalizedUrl)
-            }
-          });
-          if (trailingPunctuation.length) {
-            buffer += trailingPunctuation;
-          }
-          i += fullCandidate.length - 1;
-          continue;
-        }
-      }
-    }
-
     buffer += char;
   }
 
   pushBuffer();
-  const baseInlines = inlines.length ? inlines : [{ type: 'TextRun', text: '', wrap: true }];
-  return highlightMentionsInInlines(baseInlines);
+  return inlines.length ? inlines : [{ type: 'TextRun', text: '', wrap: true }];
 };
 
 const buildAdaptiveTableElement = (tableModel, hasPreviousElements) => {
@@ -601,14 +553,6 @@ const splitTextByTables = text => {
   return segments;
 };
 
-const hasPotentialTableSyntax = text => {
-  if (!text || typeof text !== 'string') {
-    return false;
-  }
-  // Fast-path guard: only run table parser when there is at least one pipe-formatted row.
-  return /(^|\n)\s*\|[^|\n]+\|/.test(text);
-};
-
 // Соединяет части комментария, если короткая вырезка оборвана на полпути через Jira-ссылку
 const healSplitCommentChunks = (headChunk = '', tailChunk = '') => {
   if (!headChunk || !tailChunk) {
@@ -659,91 +603,12 @@ const healSplitCommentChunks = (headChunk = '', tailChunk = '') => {
   return { headChunk: patchedHead, tailChunk: patchedTail };
 };
 
-const convertJiraOrderedListMarkers = source => {
-  if (!source) {
-    return '';
-  }
-  const lines = source.replace(/\r\n?/g, '\n').split('\n');
-  const counters = [];
-  return lines.map(line => {
-    const match = line.match(/^[ \t]*(#+)\s+(.+)$/);
-    if (!match) {
-      if (line.trim().length) {
-        counters.length = 0;
-      }
-      return line;
-    }
-    const depth = match[1].length;
-    if (depth > counters.length) {
-      while (counters.length < depth) {
-        counters.push(0);
-      }
-    } else if (depth < counters.length) {
-      counters.length = depth;
-    }
-    counters[depth - 1] += 1;
-    const indent = '   '.repeat(Math.max(depth - 1, 0));
-    return `${indent}${counters[depth - 1]}. ${match[2]}`;
-  }).join('\n');
-};
-
-// Адаптированный безопасный поднабор правил Jira Wiki -> Markdown (без HTML-вставок)
-const jiraToMarkdownSafe = source => {
-  if (!source) {
-    return '';
-  }
-  return convertJiraOrderedListMarkers(source)
-    // Unordered lists: *, **, *** -> markdown list with indentation
-    .replace(/^[ \t]*(\*+)\s+/gm, (match, stars) => `${'  '.repeat(Math.max(stars.length - 1, 0))}* `)
-    // Headers h1..h6
-    .replace(/^h([1-6])\.\s*(.+)$/gm, (match, level, content) => `${'#'.repeat(parseInt(level, 10))} ${content}`)
-    // Code block with optional language and options
-    .replace(
-      /\{code(?::([a-z0-9_+-]+))?(?:[:|](?:title|borderStyle|borderColor|borderWidth|bgColor|titleBGColor)=[^}]*)*\}([\s\S]*?)\n?\{code\}/gi,
-      (match, language, code) => `\`\`\`${language || ''}\n${code.trim()}\n\`\`\``
-    )
-    // Preformatted text block
-    .replace(/\{noformat\}/gi, '```')
-    // Single paragraph blockquote
-    .replace(/^bq\.\s+/gm, '> ')
-    // Quote block {quote}...{quote}
-    .replace(/\{quote\}([\s\S]*?)\{quote\}/gi, (match, quotedText) => {
-      const normalized = toTextValue(quotedText).replace(/\r\n?/g, '\n').trim();
-      if (!normalized.length) {
-        return '';
-      }
-      return normalized
-        .split('\n')
-        .map(line => line.trim().length ? `> ${line}` : '')
-        .join('\n');
-    })
-    // Unpaired quote tags should not leak to output.
-    .replace(/\{quote\}/gi, '')
-    // Strip unsupported color wrapper
-    .replace(/\{color:[^}]+\}([\s\S]*?)\{color\}/gi, '$1')
-    .replace(/\{color:[^}]+\}/gi, '')
-    .replace(/\{color\}/gi, '')
-    // Jira table header ||a||b|| -> markdown table
-    .replace(/^[ \t]*((?:\|\|.*?)+\|\|)[ \t]*$/gm, (match, headers) => {
-      const singleBarred = headers.replace(/\|\|/g, '|');
-      return `\n${singleBarred}\n${singleBarred.replace(/\|[^|]+/g, '| --- ')}`;
-    })
-    // Keep table rows aligned to parser expectations
-    .replace(/^[ \t]*\|/gm, '|');
-};
-
 // Преобразует текст из Jira wiki/HTML в Markdown-compatible формат для Teams Adaptive Cards.
 const prettify = input => {
-  if (input === undefined || input === null) {
-    return '';
-  }
-  const source = toTextValue(input);
-  if (!source.length) {
-    return '';
-  }
+  if (!input) return '';
 
   // Удалить HTML-теги
-  let result = jiraToMarkdownSafe(source).replace(/<[^>]*>/g, '');
+  let result = input.replace(/<[^>]*>/g, '');
 
   // Преобразовать Jira wiki в Markdown
   // Маркеры списков: *, **, - и т.д. -> Unicode bullets (● для 1-го уровня, ⚬ для 2-го) с восемью пробелами для вложенности
@@ -766,16 +631,16 @@ const prettify = input => {
   result = result.replace(/\*(\S[^*]*\S)\*/g, (match, boldText) => `**${boldText}**`);
   // Курсив: _text_ -> *text* (но избегать в URL)
   // Сначала временно заменить URL
+  const urlPlaceholder = '###URL_PLACEHOLDER###';
   const urls = [];
   result = result.replace(/(https?:\/\/[^\s]+)/g, (match) => {
-    const token = `@@URLTOKEN${urls.length}@@`;
-    urls.push({ token, url: match });
-    return token;
+    urls.push(match);
+    return urlPlaceholder;
   });
   result = result.replace(/_([^_]+)_/g, (match, italicText) => `*${italicText}*`);
   // Восстановить URL
-  urls.forEach(({ token, url }) => {
-    result = result.split(token).join(url);
+  urls.forEach(url => {
+    result = result.replace(urlPlaceholder, url);
   });
 
   // Код: {{text}} -> `text`
@@ -788,6 +653,8 @@ const prettify = input => {
     const displayText = decodeUriComponentSafe(baseUrl);
     return `[${displayText}](${rawUrl})`;
   });
+  // Одинарные # в начале строки часто используются как маркеры списков — приводим к "- "
+  result = result.replace(/(^|\n)\s*#(?!#)\s+/g, (match, prefix) => `${prefix}- `);
   // Заголовки: h1. text -> # text
   result = result.replace(/^h(\d+)\.\s*(.+)$/gm, (match, level, text) => '#'.repeat(parseInt(level)) + ' ' + text);
   // Изображения: !image.png|alt! -> ![alt](image.png)
@@ -823,15 +690,9 @@ const prettify = input => {
 
 // Делит текст на последовательность обычных сегментов и блоков кода {code[:lang]}...{code}
 const splitContentByCodeBlocks = (input, initialLanguage = null) => {
-  if (input === undefined || input === null) {
+  if (!input || typeof input !== 'string') {
     return { segments: [], danglingLanguage: initialLanguage };
   }
-  const source = toTextValue(input);
-  if (!source.length) {
-    return { segments: [], danglingLanguage: initialLanguage };
-  }
-  // Treat {noformat} as code fences to keep behavior consistent with Jira wiki.
-  const normalizedSource = source.replace(/\{noformat\}/gi, '{code}');
   const tokenRegex = /\{code(?::([^}]+))?\}/gi;
   const segments = [];
   let mode = initialLanguage ? 'code' : 'text';
@@ -842,8 +703,8 @@ const splitContentByCodeBlocks = (input, initialLanguage = null) => {
     if (!text) return;
     segments.push({ type, language: type === 'code' ? activeLanguage : null, value: text });
   };
-  while ((match = tokenRegex.exec(normalizedSource)) !== null) {
-    const chunk = normalizedSource.slice(lastIndex, match.index);
+  while ((match = tokenRegex.exec(input)) !== null) {
+    const chunk = input.slice(lastIndex, match.index);
     if (chunk) {
       pushSegment(mode === 'code' ? 'code' : 'text', chunk);
     }
@@ -857,112 +718,249 @@ const splitContentByCodeBlocks = (input, initialLanguage = null) => {
     }
     lastIndex = match.index + match[0].length;
   }
-  const tail = normalizedSource.slice(lastIndex);
+  const tail = input.slice(lastIndex);
   if (tail) {
     pushSegment(mode === 'code' ? 'code' : 'text', tail);
   }
   return { segments, danglingLanguage: mode === 'code' ? activeLanguage : null };
 };
 
-const buildMonospaceRichTextElement = (rawValue, hasPreviousElements = false) => {
-  if (rawValue === undefined || rawValue === null) {
-    return null;
+const formatErrorPreview = (value, limit = 400) => {
+  if (value === null || value === undefined) {
+    return '<empty>';
   }
-  const snippet = toTextValue(rawValue)
+  const str = String(value).replace(/\s+/g, ' ').trim();
+  if (!str.length) return '<whitespace>';
+  if (str.length <= limit) return str;
+  return str.slice(0, limit) + '…';
+};
+
+const raiseFormattingError = (stage, error, rawText) => {
+  const message = error && error.message ? error.message : String(error);
+  throw new Error(`[${stage}] ${message}. Raw excerpt: ${formatErrorPreview(rawText)}`);
+};
+
+const containsMarkdownTable = paragraph => {
+  if (!paragraph) return false;
+  const lines = paragraph.split(/\r?\n/);
+  let tableLines = 0;
+  lines.forEach(line => {
+    const trimmed = line.replace(/\u00A0/g, ' ').trim();
+    if (trimmed.startsWith('|') && trimmed.indexOf('|', 1) !== -1) {
+      tableLines++;
+    }
+  });
+  return tableLines >= 2;
+};
+
+// Определяет, напоминает ли параграф многострочный блок кода (JSON/GraphQL/HTTP и т.п.)
+const looksLikeCodeParagraph = paragraph => {
+  if (!paragraph) return false;
+  if (containsMarkdownTable(paragraph)) {
+    return false;
+  }
+  const normalized = paragraph
     .replace(/\u00A0/g, ' ')
-    .replace(/^\s*\n+/, '')
-    .replace(/\s+$/g, '');
-  if (!snippet.length) {
-    return null;
+    .replace(/\r\n?/g, '\n');
+  const lines = normalized.split('\n').filter(line => line.trim().length);
+  if (lines.length < 2) {
+    return false;
   }
-  const element = {
-    type: 'RichTextBlock',
-    inlines: [
-      {
-        type: 'TextRun',
-        text: snippet,
-        wrap: true,
-        fontType: 'Monospace'
+  let codeLines = 0;
+  lines.forEach(line => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    if (/^\{color/i.test(trimmed) || /\{color\}$/i.test(trimmed)) {
+      return;
+    }
+    if (/^[{}\[\]()]/.test(trimmed)) {
+      codeLines++;
+      return;
+    }
+    if (/^\s{2,}/.test(line) || /^\t+/.test(line)) {
+      codeLines++;
+      return;
+    }
+    if (/[:=]/.test(trimmed) && /[A-Za-z0-9"']/.test(trimmed)) {
+      codeLines++;
+      return;
+    }
+    if (/^".+":/.test(trimmed)) {
+      codeLines++;
+      return;
+    }
+    if (trimmed.includes('->') || trimmed.includes('=>')) {
+      codeLines++;
+      return;
+    }
+    if (/^\w+\s*\(.*\)\s*\{?/.test(trimmed)) {
+      codeLines++;
+      return;
+    }
+    if (/^(GET|POST|PUT|DELETE|PATCH)\s+/i.test(trimmed)) {
+      codeLines++;
+      return;
+    }
+    if (/^###URL/.test(trimmed)) {
+      codeLines++;
+      return;
+    }
+  });
+  if (codeLines / lines.length >= 0.6) {
+    return true;
+  }
+  const braceCount = (normalized.match(/[{}\[\]]/g) || []).length;
+  if (braceCount >= 4 && lines.length >= 3) {
+    return true;
+  }
+  const jsonPairs = (normalized.match(/"[^"\n]+"\s*:/g) || []).length;
+  if (jsonPairs >= 3) {
+    return true;
+  }
+  const sqlKeywords = normalized.match(/\b(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE|GROUP\s+BY|ORDER\s+BY|HAVING|JOIN|WITH|CREATE|ALTER|DROP|TRUNCATE|DESCRIBE|EXPLAIN|SHOW|OPTIMIZE|ATTACH|DETACH|GRANT|REVOKE|EXISTS|USE|SET|FORMAT|ENGINE|MATERIALIZED|CLUSTER)\b/gi) || [];
+  if (sqlKeywords.length >= 4) {
+    return true;
+  }
+  if (sqlKeywords.length >= 2 && lines.length >= 3) {
+    return true;
+  }
+  return false;
+};
+
+// Пытается определить язык блока кода для подсказки в CodeBlock
+const inferCodeLanguage = snippet => {
+  const trimmed = (snippet || '').trim();
+  if (!trimmed) return null;
+  if (/^\s*\{[\s\S]*\}/.test(trimmed) && /"[^"\n]+"\s*:/.test(trimmed)) {
+    return 'json';
+  }
+  if (/(?:\bquery\b|\bmutation\b|\bsubscription\b)/i.test(trimmed)) {
+    return 'graphql';
+  }
+  if (/^\s*(server|agent|employee)\s*\{/i.test(trimmed) && !/"[^"\n]+"\s*:/.test(trimmed)) {
+    return 'graphql';
+  }
+  if (/^\s*(GET|POST|PUT|DELETE|PATCH)\s+/i.test(trimmed)) {
+    return 'http';
+  }
+  if (/^\s*(SELECT|INSERT|UPDATE|DELETE)\b/i.test(trimmed)) {
+    return 'sql';
+  }
+  if (/^\s*(CREATE|ALTER|DROP|TRUNCATE|DESCRIBE|EXPLAIN|SHOW|OPTIMIZE|ATTACH|DETACH|GRANT|REVOKE|EXISTS|USE)\b/i.test(trimmed)) {
+    return 'sql';
+  }
+  if (/(?:\bSELECT\b|\bINSERT\b|\bUPDATE\b|\bDELETE\b|\bCREATE\b|\bALTER\b|\bDROP\b|\bTRUNCATE\b|\bDESCRIBE\b|\bEXPLAIN\b|\bSHOW\b|\bOPTIMIZE\b)/i.test(trimmed)
+    && /(\bFROM\b|\bWHERE\b|\bJOIN\b|\bVALUES\b|\bSET\b|\bTABLE\b|\bVIEW\b|\bENGINE\b|\bFORMAT\b|\bDATABASE\b|\bCLUSTER\b|\bSETTINGS\b)/i.test(trimmed)) {
+    return 'sql';
+  }
+  if (/ENGINE\s*=/i.test(trimmed) || /FORMAT\s+JSON/i.test(trimmed) || /SETTINGS\s+/i.test(trimmed)) {
+    return 'sql';
+  }
+  if (/function\s+|=>/.test(trimmed)) {
+    return 'javascript';
+  }
+  return null;
+};
+
+// Делит текстовый сегмент на параграфы и автоматически помечает кодоподобные блоки
+const splitTextSegmentByHeuristics = text => {
+  if (!text) return [];
+  const sanitized = text.replace(/\u00A0/g, ' ');
+  const normalized = sanitized.replace(/\r\n?/g, '\n');
+  const withQuoteBreaks = normalized.replace(/\s*\{quote\}\s*/gi, '\n\n');
+  const sqlBreakPattern = /([^\n])\n(\s*(?:SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|DESCRIBE|EXPLAIN|SHOW|OPTIMIZE|ATTACH|DETACH|GRANT|REVOKE|EXISTS|WITH|USE)\b)/gi;
+  const withSqlBreaks = withQuoteBreaks.replace(sqlBreakPattern, (match, before, statement) => `${before}\n\n${statement}`);
+  const paragraphs = withSqlBreaks.split(/\n{2,}/);
+  const result = [];
+  paragraphs.forEach(paragraph => {
+    if (!paragraph || !paragraph.trim()) {
+      return;
+    }
+    if (looksLikeCodeParagraph(paragraph)) {
+      result.push({ type: 'code', value: paragraph });
+    } else {
+      const tableAwareSegments = splitTextByTables(paragraph);
+      if (tableAwareSegments) {
+        tableAwareSegments.forEach(segment => {
+          if (segment.type === 'table') {
+            result.push({ type: 'table', value: segment.value });
+          } else if (segment.type === 'text' && segment.value.trim()) {
+            result.push({ type: 'text', value: segment.value });
+          }
+        });
+      } else {
+        result.push({ type: 'text', value: paragraph });
       }
-    ]
-  };
-  if (hasPreviousElements) {
-    element.spacing = 'Small';
-  }
-  return element;
+    }
+  });
+  return result;
 };
 
-const buildFormattedRichTextElement = (rawValue, hasPreviousElements = false) => {
-  let formatted = '';
-  try {
-    formatted = prettify(rawValue);
-  } catch (error) {
-    formatted = toTextValue(rawValue);
-  }
-  const trimmedText = formatted ? formatted.trim() : '';
-  if (!trimmedText || trimmedText === '.') {
-    return null;
-  }
-  const element = {
-    type: 'RichTextBlock',
-    inlines: buildRichTextInlines(formatted)
-  };
-  if (hasPreviousElements) {
-    element.spacing = 'Small';
-  }
-  return element;
-};
-
-// Преобразует сегменты текста/кода в элементы Adaptive Card (RichTextBlock, таблицы и моноширинный текст)
+// Преобразует сегменты текста/кода в элементы Adaptive Card (RichTextBlock и CodeBlock)
 const buildAdaptiveContentElements = (input, initialLanguage = null) => {
   let splitResult;
   try {
     splitResult = splitContentByCodeBlocks(input, initialLanguage);
   } catch (error) {
-    splitResult = {
-      segments: [{ type: 'text', language: null, value: toTextValue(input) }],
-      danglingLanguage: null
-    };
+    raiseFormattingError('splitContentByCodeBlocks', error, input);
   }
-  const segments = Array.isArray(splitResult.segments) ? splitResult.segments : [];
-  const danglingLanguage = splitResult && splitResult.danglingLanguage ? splitResult.danglingLanguage : null;
+  const { segments, danglingLanguage } = splitResult;
   const elements = [];
-
   segments.forEach(segment => {
-    if (!segment) {
-      return;
-    }
     if (segment.type === 'code') {
-      const codeElement = buildMonospaceRichTextElement(segment.value, elements.length > 0);
-      if (codeElement) {
-        elements.push(codeElement);
+      const snippet = typeof segment.value === 'string'
+        ? segment.value.replace(/\s+$/g, '')
+        : segment.value;
+      if (!snippet) {
+        return;
       }
+      const codeElement = {
+        type: 'CodeBlock',
+        codeSnippet: snippet
+      };
+      if (segment.language) {
+        codeElement.language = segment.language;
+      }
+      if (elements.length) codeElement.spacing = 'Small';
+      elements.push(codeElement);
     } else {
-      let queue = [{ type: 'text', value: segment.value }];
+      let textPieces;
       try {
-        const rawText = toTextValue(segment.value);
-        if (hasPotentialTableSyntax(rawText)) {
-          const tableAwareSegments = splitTextByTables(rawText);
-          if (Array.isArray(tableAwareSegments) && tableAwareSegments.length) {
-            queue = tableAwareSegments;
-          }
-        }
+        textPieces = splitTextSegmentByHeuristics(segment.value);
       } catch (error) {
-        queue = [{ type: 'text', value: segment.value }];
+        raiseFormattingError('splitTextSegmentByHeuristics', error, segment.value);
       }
-
+      const queue = textPieces.length ? textPieces : [{ type: 'text', value: segment.value }];
       queue.forEach(piece => {
-        if (!piece) {
-          return;
-        }
-        if (piece.type === 'table') {
-          const tableElement = buildAdaptiveTableElement(piece.value, elements.length > 0);
+        if (piece.type === 'code') {
+          const snippet = typeof piece.value === 'string'
+            ? piece.value.replace(/\u00A0/g, ' ').replace(/^\s*\n+/, '').replace(/\s+$/g, '')
+            : piece.value;
+          if (!snippet) return;
+          const codeElement = {
+            type: 'CodeBlock',
+            codeSnippet: snippet
+          };
+          const detectedLanguage = inferCodeLanguage(snippet);
+          if (detectedLanguage) {
+            codeElement.language = detectedLanguage;
+          }
+          if (elements.length) codeElement.spacing = 'Small';
+          elements.push(codeElement);
+        } else if (piece.type === 'table') {
+          const tableElement = buildAdaptiveTableElement(piece.value, elements.length);
           if (tableElement) {
             elements.push(tableElement);
           }
         } else {
-          const textElement = buildFormattedRichTextElement(piece.value, elements.length > 0);
-          if (textElement) {
+          const formatted = prettify(piece.value);
+          const trimmedText = formatted ? formatted.trim() : '';
+          if (trimmedText && trimmedText !== '.') {
+            const textElement = {
+              type: 'RichTextBlock',
+              inlines: buildRichTextInlines(formatted)
+            };
+            if (elements.length) textElement.spacing = 'Small';
             elements.push(textElement);
           }
         }
@@ -1230,12 +1228,7 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
             wrap: true,
             spacing: "Small"
           },
-          {
-            type: "Container",
-            style: "emphasis",
-            spacing: "None",
-            items: shortContent.elements
-          },
+          ...shortContent.elements,
           {
             type: "ActionSet",
             id: "showMore",
@@ -1277,12 +1270,7 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
             wrap: true,
             spacing: "Small"
           },
-          {
-            type: "Container",
-            style: "emphasis",
-            spacing: "None",
-            items: shortContent.elements
-          }
+          ...shortContent.elements
         ];
       }
     } else {
@@ -1537,57 +1525,8 @@ const buildCardBody = (blockType, input, badgeText, contextBlock, roleFacts, iss
   ];
 };
 
-const sanitizeAdaptiveCardPayload = payload => {
-  const mapValue = value => {
-    if (Array.isArray(value)) {
-      return value.map(mapValue);
-    }
-    if (!value || typeof value !== 'object') {
-      return value;
-    }
-    if (value.type === 'RichTextBlock' && Array.isArray(value.inlines)) {
-      const mapped = {};
-      Object.keys(value).forEach(key => {
-        mapped[key] = mapValue(value[key]);
-      });
-      mapped.inlines = highlightMentionsInInlines(mapped.inlines);
-      return mapped;
-    }
-    if (value.type === 'CodeBlock') {
-      const sanitized = {
-        type: 'RichTextBlock',
-        inlines: [
-          {
-            type: 'TextRun',
-            text: toTextValue(value.codeSnippet).replace(/\u00A0/g, ' ') || '-',
-            wrap: true,
-            fontType: 'Monospace'
-          }
-        ]
-      };
-      if (value.spacing) sanitized.spacing = value.spacing;
-      if (value.id) sanitized.id = value.id;
-      if (Object.prototype.hasOwnProperty.call(value, 'isVisible')) {
-        sanitized.isVisible = value.isVisible;
-      }
-      if (value.separator) sanitized.separator = value.separator;
-      if (value.height) sanitized.height = value.height;
-      if (value.fallback) sanitized.fallback = mapValue(value.fallback);
-      if (value.requires) sanitized.requires = value.requires;
-      return sanitized;
-    }
-    const mapped = {};
-    Object.keys(value).forEach(key => {
-      mapped[key] = mapValue(value[key]);
-    });
-    return mapped;
-  };
-  return mapValue(payload);
-};
-
 // Отправляет адаптивную карточку через HTTP-запрос к вебхуку Teams, обрабатывая ошибки и возвращая ответ.
 const sendCard = (service, webhookUrl, card, sendUid) => {
-  const sanitizedCard = sanitizeAdaptiveCardPayload(card);
   let response;
   try {
     response = service.request({
@@ -1597,7 +1536,7 @@ const sendCard = (service, webhookUrl, card, sendUid) => {
         "Content-Type": "application/json",
         "x-ms-client-request-id": sendUid
       },
-      jsonBody: { payload: JSON.stringify(sanitizedCard) }
+      jsonBody: { payload: JSON.stringify(card) }
     });
   } catch (e) {
     throw new Error("Ошибка при выполнении запроса: " + e.message);
@@ -2014,153 +1953,9 @@ const executeFeedbackBlock = (service, bundle) => {
   return buildOutput(response, sendTime, duration, targetEmails, webhookUrl, sendUid, cardUuid);
 };
 
-// Выполняет блок уведомления о новом тикете OTRS, связанном с Jira-задачей.
-const executeOtrsTicketBlock = (service, bundle) => {
-  const input = bundle.inputData;
-  const common = getCommonData(bundle, input);
-  const cardUuid = input.card_uuid;
-
-  const issueUrlRaw = coalesceInputValue(input, ["issue_url"]);
-  const issueUrl = issueUrlRaw ? safe(issueUrlRaw) : `${common.jiraBaseUrl}/browse/${safe(input.issue_key)}`;
-  const otrsBaseUrl = (bundle.authData.otrs_base_url || "").trim().replace(/\/$/, "");
-  const ticketNumberRaw = coalesceInputValue(input, ["ticket_number", "otrs_ticket_number", "ticket_no", "otrs_number"]);
-  const ticketIdRaw = coalesceInputValue(input, ["ticket_id", "otrs_ticket_id", "otrs_id"]);
-  const normalizedTicketId = ticketIdRaw ? String(ticketIdRaw).trim() : "";
-  const normalizedTicketNumber = ticketNumberRaw ? String(ticketNumberRaw).trim() : "";
-  let otrsUrl = null;
-  if (otrsBaseUrl) {
-    if (normalizedTicketId) {
-      otrsUrl = `${otrsBaseUrl}/index.pl?Action=AgentTicketZoom;TicketID=${encodeURIComponent(normalizedTicketId)}`;
-    } else if (normalizedTicketNumber) {
-      otrsUrl = `${otrsBaseUrl}/index.pl?Action=AgentTicketZoom;TicketNumber=${encodeURIComponent(normalizedTicketNumber)}`;
-    } else {
-      otrsUrl = otrsBaseUrl;
-    }
-  }
-  const titleRaw = coalesceInputValue(input, ["ticket_title"]);
-  const titleValue = safe(titleRaw || `Тикет OTRS #${ticketNumberRaw || input.issue_key || "-"}`);
-  const ticketNumberValue = safe(ticketNumberRaw || input.issue_key);
-  const clientIdRaw = coalesceInputValue(input, ["company_domain", "client_id"]);
-  const clientIdValue = safe(clientIdRaw);
-  const reporterValue = safe(input.reporter_name || input.reporter || input.reporter_email);
-  const createdAtValue = safe(input.created_at);
-
-  const otrsFacts = [
-    { title: "Номер тикета:", value: ticketNumberValue },
-    ...(clientIdRaw ? [{ title: "ID клиента:", value: clientIdValue }] : []),
-    ...(createdAtValue !== "-" ? [{ title: "Дата создания:", value: createdAtValue }] : [])
-  ];
-  const jiraFacts = [
-    { title: "Ключ задачи:", value: safe(input.issue_key) },
-    ...(reporterValue !== "-" ? [{ title: "Инициатор:", value: reporterValue }] : [])
-  ];
-
-  const card = {
-    type: "AdaptiveCard",
-    version: "1.5",
-    body: [
-      {
-        type: "TextBlock",
-        text: "powered by Proceset",
-        size: "Small",
-        horizontalAlignment: "Right",
-        isSubtle: true,
-        spacing: "None"
-      },
-      {
-        type: "Container",
-        style: "accent",
-        showBorder: true,
-        roundedCorners: true,
-        spacing: "Medium",
-        items: [
-          {
-            type: "Badge",
-            text: "Новый тикет в OTRS",
-            size: "ExtraLarge",
-            style: "Accent",
-            icon: "Feed"
-          },
-          {
-            type: "TextBlock",
-            text: titleValue,
-            wrap: true,
-            weight: "Bolder",
-            size: "Medium",
-            spacing: "Small"
-          }
-        ]
-      },
-      {
-        type: "Container",
-        style: "emphasis",
-        showBorder: true,
-        roundedCorners: true,
-        spacing: "Medium",
-        items: [
-          {
-            type: "TextBlock",
-            text: "OTRS",
-            weight: "Bolder",
-            spacing: "None"
-          },
-          {
-            type: "FactSet",
-            spacing: "Small",
-            facts: otrsFacts
-          }
-        ]
-      },
-      {
-        type: "Container",
-        style: "emphasis",
-        showBorder: true,
-        roundedCorners: true,
-        spacing: "Medium",
-        items: [
-          {
-            type: "TextBlock",
-            text: "JIRA",
-            weight: "Bolder",
-            spacing: "None"
-          },
-          {
-            type: "FactSet",
-            spacing: "Small",
-            facts: jiraFacts
-          }
-        ]
-      }
-    ],
-    actions: [
-      ...(otrsUrl
-        ? [{
-          type: "Action.OpenUrl",
-          title: "Открыть тикет в OTRS",
-          url: otrsUrl,
-          iconUrl: "icon:Link",
-          style: "positive"
-        }]
-        : []),
-      {
-        type: "Action.OpenUrl",
-        title: "Открыть задачу в Jira",
-        url: issueUrl,
-        iconUrl: "icon:Link",
-        style: "positive"
-      }
-    ],
-    data: { targetEmails: common.targetEmails, card_uuid: cardUuid, send_uid: common.sendUid }
-  };
-
-  const response = sendCard(service, common.webhookUrl, card, common.sendUid);
-  const duration = Date.now() - common.start;
-  return buildOutput(response, common.sendTime, duration, common.targetEmails, common.webhookUrl, common.sendUid, cardUuid);
-};
-
 app = {
   schema: 2,
-  version: '1.7.3',
+  version: '1.7.2',
   label: 'Jira → Teams Уведомления',
   description: 'Уведомления о событиях Jira в Microsoft Teams. Автоматически адаптируется под тип задачи (эпик, задача, подзадача) и роль получателя',
   blocks: {
@@ -2284,22 +2079,6 @@ app = {
       ],
 
       executePagination: (service, bundle) => executeJiraBlock(service, 'project_issue', bundle)
-    },
-    NewOtrsTicket: {
-      label: "Новый тикет в OTRS",
-      description: "Отправляет адаптивную карточку в Teams при создании тикета OTRS и его связи с Jira-задачей.",
-      inputFields: [
-        { key: "ticket_number", label: "Номер тикета OTRS", type: "text", hint: "ticket_number" },
-        { key: "ticket_title", label: "Название обращения OTRS", type: "text", hint: "ticket_title" },
-        { key: "company_domain", label: "ID клиента", type: "text", hint: "company_domain" },
-        { key: "issue_key", label: "Ключ задачи Jira", type: "text", hint: "issue_key", required: true },
-        { key: "reporter_name", label: "Инициатор", type: "text", hint: "reporter_username" },
-        { key: "created_at", label: "Дата создания", type: "text", hint: "created_at" },
-        { key: "target_emails", label: "Получатели уведомления", type: "text", hint: "target_emails", required: true },
-        { key: "card_uuid", label: "UUID адаптивной карточки", type: "text", hint: "card_uuid", required: true }
-      ],
-
-      executePagination: (service, bundle) => executeOtrsTicketBlock(service, bundle)
     },
     NewCardType: {
       label: "Добавление типа уведомления (Системное)",
@@ -2689,6 +2468,16 @@ app = {
           listSections.length ? listSections : null
         );
       }
+    },
+    RequestFeedback: {
+      label: "Запрос обратной связи",
+      description: "Отправляет интерактивную адаптивную карточку с формой для оценки системы уведомлений JIRA → Teams",
+      inputFields: [
+        { key: "card_uuid", label: "UUID адаптивной карточки", type: "text", hint: "card_uuid", required: true },
+        { key: "target_emails", label: "Получатели уведомления", type: "text", hint: "target_emails", required: true }
+      ],
+
+      executePagination: (service, bundle) => executeFeedbackBlock(service, bundle)
     }
   },
   connections: {
@@ -2710,14 +2499,6 @@ app = {
           placeholder: "https://example.jira.domain.name.com",
           hint: "jira_base_url",
           required: true
-        },
-        {
-          key: "otrs_base_url",
-          label: "Базовый URL OTRS",
-          type: "text",
-          placeholder: "https://example.otrs.domain.name.com",
-          hint: "otrs_base_url",
-          required: false
         },
         {
           key: "authorize_button",
@@ -2759,7 +2540,6 @@ app = {
             saveFields: () => ({
               incoming_webhook_url: null,
               jira_base_url: "",
-              otrs_base_url: "",
               connect_status: null
             }),
             message: () => "Подключение удалено."
@@ -2768,8 +2548,7 @@ app = {
       ],
       execute: (service, bundle) => ({
         webhookUrl: bundle.authData.incoming_webhook_url,
-        jiraBaseUrl: bundle.authData.jira_base_url,
-        otrsBaseUrl: bundle.authData.otrs_base_url
+        jiraBaseUrl: bundle.authData.jira_base_url
       })
     }
   }
